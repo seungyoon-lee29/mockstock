@@ -4,6 +4,7 @@
 // 성공·에러 문구는 서버가 이미 한국어로 내려주므로 그대로 표기(정책 문구 단일 출처 — 중복 하드코딩 금지).
 // 미체결 지정가는 이 화면에서 접수한 것만 로컬 유지(전체 조회 API 없음 — 포트폴리오 담당).
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { type Side, type UniverseEntry } from "@mockstock/shared";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
@@ -21,12 +22,14 @@ const NETWORK_ERROR = "요청을 처리하지 못했습니다. 잠시 후 다시
 
 export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: number }) {
   const { data: session, isPending } = authClient.useSession();
+  const pathname = usePathname(); // 로그인 후 이 종목으로 복귀시킬 callbackURL
   const [tab, setTab] = useState<OrderTab>("market");
   const [side, setSide] = useState<Side>("buy");
   const [qty, setQty] = useState("");
   const [limit, setLimit] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [needsLogin, setNeedsLogin] = useState(false); // 게스트 주문 403 → 실계정 전환 유도
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [guestBusy, setGuestBusy] = useState(false);
 
@@ -37,6 +40,7 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
 
   async function submit() {
     setFeedback(null);
+    setNeedsLogin(false);
     if (!Number.isInteger(qtyNum) || qtyNum <= 0) {
       setFeedback({ ok: false, text: "수량은 1 이상의 정수여야 합니다." });
       return;
@@ -62,6 +66,8 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
       const body = await res.json().catch(() => ({}) as Record<string, unknown>);
       const text = typeof body.message === "string" ? body.message : NETWORK_ERROR;
       setFeedback({ ok: res.ok, text });
+      // 익명 게스트 주문 게이트(§5.4) → 그 자리에서 실계정 전환 버튼 노출.
+      if (res.status === 403) setNeedsLogin(true);
       // 지정가 접수 성공(201 open) → 로컬 미체결 목록에 추가.
       if (res.ok && tab === "limit" && body.status === "open") {
         setOpenOrders((prev) => [
@@ -211,6 +217,29 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
         >
           {feedback.text}
         </p>
+      )}
+
+      {/* ponytail: LoginPrompt(portfolio) 패턴을 인라인 재현. 두 번째 소비처 생기면 그때 추출. */}
+      {needsLogin && (
+        <div className="flex flex-col gap-2">
+          <Button
+            className="w-full rounded-full font-semibold"
+            onClick={() =>
+              authClient.signIn.social({ provider: "google", callbackURL: pathname })
+            }
+          >
+            Google로 로그인
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full rounded-full font-semibold"
+            onClick={() =>
+              authClient.signIn.social({ provider: "github", callbackURL: pathname })
+            }
+          >
+            GitHub로 로그인
+          </Button>
+        </div>
       )}
 
       {openOrders.length > 0 && (
