@@ -1,0 +1,28 @@
+{
+  "name": "@mockstock/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schema": "./src/schema.ts",
+    "./fillOrder": "./src/fillOrder.ts",
+    "./calendar": "./src/marketCalendar.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@types/node": "^20",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.22.4",
+    "typescript": "^5"
+  }
+}
