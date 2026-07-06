@@ -1,0 +1,5 @@
+# git worktree 생성 시 복사할 gitignore된 파일들 (로컬 개발 즉시 구동용)
+web/.env
+web/.env.local
+worker/.env
+CLAUDE.local.md

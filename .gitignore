@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+
+# next.js
+web/.next/
+web/out/
+web/next-env.d.ts
+
+# worker build
+worker/dist/
+
+# env
+.env
+.env.*
+!.env.example
+
+# local dev db (pglite)
+**/.pglite-data/
+*.local
+
+# brainstorm visual companion
+.superpowers/
+
+# claude code (개인 설정)
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/agent-memory/
+
+# os / editor
+.DS_Store
+*.log
+.idea/
+
+# vercel
+.vercel
+
+# 로컬 툴링 산출물
+.mcp.json
+.playwright-mcp/

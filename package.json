@@ -1,0 +1,22 @@
+{
+  "name": "mockstock",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "worker",
+    "web"
+  ],
+  "comment:dependencies": "web의 drizzle-orm은 루트로 호이스트되지만 그 optional peer인 neon 드라이버는 web에만 있어 루트 drizzle-orm이 해석하지 못한다. 루트에 선언해 호이스트 위치를 맞춘다(T03).",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0"
+  },
+  "scripts": {
+    "dev:web": "npm run dev -w web",
+    "dev:worker": "npm run dev -w @mockstock/worker",
+    "build": "npm run build -w web",
+    "test": "npm run test -w shared && npm run test -w web && npm run test -w @mockstock/worker",
+    "lint": "npm run lint -w web",
+    "typecheck": "npm run typecheck -w @mockstock/shared && npm run typecheck -w @mockstock/worker"
+  }
+}
