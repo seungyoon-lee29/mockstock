@@ -1,0 +1,35 @@
+{
+  "id": "covid-2020",
+  "name": "코로나 폭락·반등 (2020)",
+  "description": "2020년 코로나19 충격으로 인한 급락과 V자 반등을 체험하는 시나리오",
+  "dataPeriod": {
+    "start": "2019-12-02",
+    "end": "2020-09-30",
+    "note": "warmup 1개월(2019-12) 포함 — 초기 시세 컨텍스트용"
+  },
+  "playPeriod": {
+    "start": "2020-01-02",
+    "end": "2020-07-31"
+  },
+  "reportTailPeriod": {
+    "start": "2020-08-01",
+    "end": "2020-09-30"
+  },
+  "symbols": {
+    "US": [
+      "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META",
+      "TSLA", "AVGO", "AMD", "NFLX", "JPM", "V",
+      "DIS", "KO", "UBER", "SBUX"
+    ],
+    "KR": "pending — 공공데이터포털 금융위 API 키 필요"
+  },
+  "source": {
+    "provider": "Yahoo Finance (yfinance)",
+    "note": "PRD §8 지정 Stooq CSV가 JS PoW 챌린지로 자동화 접근 차단됨에 따라 Yahoo Finance 분할조정 일봉으로 대체. 데이터는 split-adjusted 종가 기준.",
+    "fetchedAt": "2026-07-05"
+  },
+  "symbolExclusions": [
+    { "symbol": "PLTR", "reason": "2020-09-30 직상장 — 시나리오 시작 시점 미상장" },
+    { "symbol": "COIN", "reason": "2021-04-14 상장 — 시나리오 기간 외 미상장" }
+  ]
+}
