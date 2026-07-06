@@ -7,6 +7,8 @@ export interface WorkerConfig {
   port: number;
   feeds: Record<Market, FeedKind>;
   finnhubApiKey: string | null; // US 실시세 토큰. 없으면 finnhub→mock 폴백(B6/B14: 워커 env 전용).
+  kisAppKey: string | null; // KR 실시세 앱키(모의/VTS). 없으면 kis→mock 폴백(B6/B14: 워커 env 전용).
+  kisAppSecret: string | null; // KR 실시세 시크릿. 로그 노출 금지.
   workerSecret: string | null;
   corsOrigin: string;
   databaseUrl: string | null;
@@ -23,6 +25,8 @@ export const config: WorkerConfig = {
     US: feedKind(process.env.FEED_US, "mock"),
   },
   finnhubApiKey: process.env.FINNHUB_API_KEY || null,
+  kisAppKey: process.env.KIS_APP_KEY || null,
+  kisAppSecret: process.env.KIS_APP_SECRET || null,
   workerSecret: process.env.WORKER_SECRET || null,
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
   databaseUrl: process.env.DATABASE_URL || null,
