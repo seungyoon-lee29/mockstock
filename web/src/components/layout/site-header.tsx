@@ -12,6 +12,7 @@ const NAV = [
   { href: "/leaderboard", label: "리더보드" },
   { href: "/portfolio", label: "포트폴리오" },
   { href: "/replay", label: "리플레이" },
+  { href: "/search", label: "검색" },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {
