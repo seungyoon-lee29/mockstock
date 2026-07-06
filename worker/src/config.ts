@@ -31,3 +31,22 @@ export const config: WorkerConfig = {
   corsOrigin: process.env.CORS_ORIGIN ?? "*",
   databaseUrl: process.env.DATABASE_URL || null,
 };
+
+/**
+ * 프로덕션 fail-closed 부팅 게이트(worker.md). NODE_ENV=production에선 WORKER_SECRET(실값)과
+ * CORS_ORIGIN(실오리진, '*' 불가)이 둘 다 있어야 기동한다. 하나라도 없으면 무인증 상태변경·
+ * 전체 오리진 개방을 막기 위해 부팅을 거부(process.exit(1))한다. 비프로덕션(로컬 mock)은 통과.
+ */
+export function assertProductionConfig(): void {
+  if (process.env.NODE_ENV !== "production") return; // 로컬 mock 무해 — 게이트 미발동
+  const missing: string[] = [];
+  if (!config.workerSecret) missing.push("WORKER_SECRET");
+  if (!config.corsOrigin || config.corsOrigin === "*") missing.push("CORS_ORIGIN(실오리진, '*' 불가)");
+  if (missing.length) {
+    console.error(
+      `[worker] 프로덕션 부팅 거부 — 필수 보안 env 누락: ${missing.join(", ")}. ` +
+        `무인증 상태변경/전체 오리진 개방을 막기 위해 기동하지 않습니다.`,
+    );
+    process.exit(1);
+  }
+}

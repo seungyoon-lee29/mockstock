@@ -49,7 +49,8 @@ export function createHttpServer(book: PriceBook): http.Server {
     }
 
     if (url.pathname === "/snapshot") {
-      // ponytail: T05에서 web→worker 인증 강제. 지금은 시크릿 설정 시에만 검증.
+      // 읽기 경로 — 시크릿 설정 시에만 검증. 프로덕션은 부팅 게이트가 시크릿을 보장하므로 사실상 상시 인증,
+      // 로컬 mock(시크릿 미설정)은 무인증 읽기 허용(무해). 상태변경은 /internal/orders/sync에서 무조건 인증.
       if (config.workerSecret && req.headers["x-worker-secret"] !== config.workerSecret) {
         res.statusCode = 401;
         res.end("unauthorized");
@@ -62,13 +63,14 @@ export function createHttpServer(book: PriceBook): http.Server {
     }
 
     if (url.pathname === "/internal/orders/sync") {
-      // web→worker 주문 sync push(§7.1). 상태 변경 인입은 전부 인증(worker.md) — 시크릿 불일치 401.
+      // web→worker 주문 sync push(§7.1). 상태 변경 인입은 예외 없이 인증(worker.md) — fail-closed:
+      // 시크릿 미설정이면 무조건 거부(무인증 상태변경 경로 금지). 프로덕션은 부팅 게이트가 시크릿 보장.
       if (req.method !== "POST") {
         res.statusCode = 405;
         res.end("method not allowed");
         return;
       }
-      if (config.workerSecret && req.headers["x-worker-secret"] !== config.workerSecret) {
+      if (!config.workerSecret || req.headers["x-worker-secret"] !== config.workerSecret) {
         res.statusCode = 401;
         res.end("unauthorized");
         return;

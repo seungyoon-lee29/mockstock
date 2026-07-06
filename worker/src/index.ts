@@ -1,12 +1,14 @@
 // 워커 엔트리 — 시장별 피드 → 시세북 → HTTP/SSE. mock 기본이라 키 없이 구동.
 import type { Market } from "@mockstock/shared";
-import { config } from "./config";
+import { config, assertProductionConfig } from "./config";
 import { PriceBook } from "./priceBook";
 import { createFeed, type Feed } from "./feeds";
 import { createHttpServer } from "./sse";
 import { startMatching } from "./matching";
 import { startCron } from "./cron";
 import { startBots } from "./bots";
+
+assertProductionConfig(); // 프로덕션 fail-closed 부팅 게이트 (worker.md) — 시크릿/CORS 없으면 기동 거부
 
 const book = new PriceBook();
 const feeds: Feed[] = [];
