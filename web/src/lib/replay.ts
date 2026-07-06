@@ -100,3 +100,53 @@ export function buyAndHoldReturnPct(candles: Candle[], startIdx: number, endIdx:
   if (!base || !last) return 0;
   return (last / base - 1) * 100;
 }
+
+// ── 게스트 결과 보존(§194) ─────────────────────────────────────────────────────
+// 게스트가 완주 후 로그인하러 떠나면 결과가 로컬 상태와 함께 사라진다. 로그인 왕복(OAuth
+// 리다이렉트) 동안 sessionStorage에 결과+멱등키를 보존 → 복귀 시 POST /api/replay 로 한 번만
+// 재제출. 멱등키 `id`는 재제출 시 replay_sessions PK로 그대로 쓰여 서버 onConflictDoNothing 이
+// 새로고침·중복 트리거의 이중 저장을 차단한다(결과 정확성).
+export const REPLAY_PENDING_KEY = "mockstock.replay.pending";
+
+export type PendingReplayResult = {
+  id: string; // 멱등키 = 재제출 시 PK
+  scenarioId: string;
+  returnPct: number;
+  mdd: number;
+};
+
+export function savePendingReplay(r: PendingReplayResult): void {
+  try {
+    sessionStorage.setItem(REPLAY_PENDING_KEY, JSON.stringify(r));
+  } catch {
+    /* 저장 불가(프라이빗 모드 등) — 보존 못 하면 기존 게스트 CTA로 폴백 */
+  }
+}
+
+export function loadPendingReplay(): PendingReplayResult | null {
+  try {
+    const raw = sessionStorage.getItem(REPLAY_PENDING_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<PendingReplayResult>;
+    // 손상·구버전 데이터 방어(신뢰 경계 아님 — 서버가 최종 검증·정규화).
+    if (
+      typeof p.id === "string" &&
+      typeof p.scenarioId === "string" &&
+      typeof p.returnPct === "number" &&
+      typeof p.mdd === "number"
+    ) {
+      return p as PendingReplayResult;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingReplay(): void {
+  try {
+    sessionStorage.removeItem(REPLAY_PENDING_KEY);
+  } catch {
+    /* no-op */
+  }
+}

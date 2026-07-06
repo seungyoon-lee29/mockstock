@@ -12,6 +12,9 @@ import {
   firstIndexOnOrAfter,
   lastIndexOnOrBefore,
   stepIntervalMs,
+  savePendingReplay,
+  loadPendingReplay,
+  clearPendingReplay,
   type Candle,
 } from "./replay";
 
@@ -79,4 +82,25 @@ test("buyAndHold 수익률: 100→120 = +20%", () => {
 test("배속 간격: 클수록 짧다", () => {
   assert.ok(stepIntervalMs(30) < stepIntervalMs(10));
   assert.ok(stepIntervalMs(10) < stepIntervalMs(1));
+});
+
+test("게스트 결과 보존(§194): 저장→로드 라운드트립·손상 데이터 거부·정리", () => {
+  const store = new Map<string, string>();
+  (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  };
+
+  const pending = { id: "abc", scenarioId: "covid-2020", returnPct: 12.5, mdd: -8.3 };
+  savePendingReplay(pending);
+  assert.deepEqual(loadPendingReplay(), pending); // 라운드트립
+
+  clearPendingReplay();
+  assert.equal(loadPendingReplay(), null); // 정리 후 없음
+
+  store.set("mockstock.replay.pending", JSON.stringify({ id: 1, returnPct: "x" }));
+  assert.equal(loadPendingReplay(), null); // 타입 손상 → 거부
+
+  delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
 });

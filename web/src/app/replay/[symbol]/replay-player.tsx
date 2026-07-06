@@ -5,7 +5,10 @@
 // reportTail("실제 역사 vs 나") 공개. 성적은 /api/replay 로 개인 기록만 저장(게스트는 로그인 CTA).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { toast } from "sonner";
 import type { CandlestickData, Time } from "lightweight-charts";
+import { authClient } from "@/lib/auth-client";
 import { PriceChart } from "@/components/PriceChart";
 import { PriceText } from "@/components/PriceText";
 import { Button } from "@/components/ui/button";
@@ -28,6 +31,9 @@ import {
   returnPct,
   maxDrawdown,
   buyAndHoldReturnPct,
+  savePendingReplay,
+  loadPendingReplay,
+  clearPendingReplay,
   type Candle,
   type ReplayManifest,
   type ReplayAccount,
@@ -40,6 +46,32 @@ const fractionLabel = (f: number) => (f === 1 ? "전량" : `${Math.round(f * 100
 export function ReplayPlayer({ symbol }: { symbol: string }) {
   const [data, setData] = useState<{ manifest: ReplayManifest; candles: Candle[] } | null>(null);
   const [error, setError] = useState(false);
+
+  // 로그인 왕복 후 복귀(§194): 보존된 게스트 결과를 감지해 한 번만 재제출. 멱등키(id)로 서버가
+  // 중복 저장을 막고, resubmitting ref + 성공 시 정리로 클라 이중 트리거도 차단. 미로그인 응답
+  // (id=null)이면 보존 유지 → 실제 로그인 후 재시도.
+  const resubmitting = useRef(false);
+  useEffect(() => {
+    if (resubmitting.current) return;
+    const pending = loadPendingReplay();
+    if (!pending) return;
+    resubmitting.current = true;
+    fetch("/api/replay", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(pending),
+    })
+      .then((r) => (r.ok ? r.json() : { id: null }))
+      .then((b: { id: string | null }) => {
+        if (b.id) {
+          clearPendingReplay();
+          toast.success("이전 훈련 기록을 저장했어요.");
+        }
+      })
+      .catch(() => {
+        resubmitting.current = false; // 네트워크 실패 → 다음 방문에 재시도
+      });
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -209,6 +241,19 @@ function ReplaySession({
       .catch(() => (sessionIdRef.current = null));
   }
 
+  const pathname = usePathname(); // 로그인 후 이 종목으로 복귀시킬 callbackURL
+
+  // 게스트 완주 결과를 sessionStorage에 보존 후 소셜 로그인(§194). 복귀 시 ReplayPlayer가 재제출.
+  function saveViaLogin(provider: "google" | "github") {
+    savePendingReplay({
+      id: crypto.randomUUID(),
+      scenarioId: REPLAY_SCENARIO_ID,
+      returnPct: rtnPct,
+      mdd: maxDrawdown(curve),
+    });
+    authClient.signIn.social({ provider, callbackURL: pathname });
+  }
+
   const progress = playEnd > playStart ? (cursor - playStart) / (playEnd - playStart) : 1;
   const holding = account.qty > 1e-9;
   const avgCost = holding ? account.costBasis / account.qty : 0;
@@ -282,6 +327,7 @@ function ReplaySession({
               revealTail={revealTail}
               onRevealTail={() => setRevealTail(true)}
               saveState={saveState}
+              onSaveViaLogin={saveViaLogin}
               onReset={reset}
             />
           ) : (
@@ -374,6 +420,7 @@ function ResultCard({
   revealTail,
   onRevealTail,
   saveState,
+  onSaveViaLogin,
   onReset,
 }: {
   rtnPct: number;
@@ -384,6 +431,7 @@ function ResultCard({
   revealTail: boolean;
   onRevealTail: () => void;
   saveState: "idle" | "saved" | "guest";
+  onSaveViaLogin: (provider: "google" | "github") => void;
   onReset: () => void;
 }) {
   return (
@@ -422,9 +470,21 @@ function ResultCard({
           <p className="text-center text-xs text-muted-foreground">기록이 프로필에 저장되었습니다.</p>
         )}
         {saveState === "guest" && (
-          <Button asChild variant="outline" className="w-full">
-            <Link href="/login">로그인하고 기록 저장</Link>
-          </Button>
+          <div className="flex flex-col gap-2">
+            <p className="text-center text-xs text-muted-foreground">
+              로그인하면 이 기록이 프로필에 저장됩니다.
+            </p>
+            <Button className="w-full rounded-full font-semibold" onClick={() => onSaveViaLogin("google")}>
+              Google로 로그인하고 저장
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full rounded-full font-semibold"
+              onClick={() => onSaveViaLogin("github")}
+            >
+              GitHub로 로그인하고 저장
+            </Button>
+          </div>
         )}
 
         <div className="flex gap-2 pt-1">

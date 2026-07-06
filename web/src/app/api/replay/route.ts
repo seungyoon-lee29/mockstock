@@ -29,9 +29,31 @@ export async function POST(req: NextRequest): Promise<Response> {
   } catch {
     body = {};
   }
-  const scenarioId = (body as { scenarioId?: unknown }).scenarioId;
+  const { scenarioId, id: pendingId, returnPct, mdd } = body as {
+    scenarioId?: unknown;
+    id?: unknown;
+    returnPct?: unknown;
+    mdd?: unknown;
+  };
   if (scenarioId !== REPLAY_SCENARIO_ID) {
     return json(400, { message: "알 수 없는 시나리오입니다." });
+  }
+
+  // 게스트→로그인 복귀 후 보존 결과 재제출(§194): 클라 멱등키(id)+결과를 완주 상태로 저장.
+  // id를 PK로 삼아 onConflictDoNothing → 새로고침·중복 트리거의 이중 저장 차단(멱등).
+  if (typeof pendingId === "string") {
+    await getDb()
+      .insert(replaySessions)
+      .values({
+        id: pendingId,
+        userId: session.user.id,
+        scenarioId: REPLAY_SCENARIO_ID,
+        returnPct: toNumeric(returnPct),
+        mdd: toNumeric(mdd),
+        finishedAt: new Date(),
+      })
+      .onConflictDoNothing();
+    return json(201, { id: pendingId });
   }
 
   const id = crypto.randomUUID();
