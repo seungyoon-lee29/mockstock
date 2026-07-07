@@ -1,7 +1,7 @@
 // 리플레이(과거장 훈련소) 순수 로직 — 클라이언트 로컬 재생·로컬 체결(PRD §5.3).
 // 실계좌 체결(fillOrder/DB)과 분리된 훈련 모드라 여기서는 DB를 쓰지 않는다(성적만 replay_sessions에 기록).
 // 정적 JSON은 public/replay/<scenario>/ 아래. 시나리오 v1은 1개(2020 코로나 폭락).
-import { SEED_MONEY_KRW } from "@mockstock/shared";
+import { SEED_MONEY_KRW, aggregateDailyToWeekly, type DailyCandle } from "@mockstock/shared";
 
 // ── 시나리오·데이터 위치 (단일 소스, 경로 리터럴 산재 금지) ──────────────────────
 export const REPLAY_SCENARIO_ID = "covid-2020";
@@ -18,7 +18,8 @@ export const REPLAY_BASE_STEP_MS = 24_000;
 export const stepIntervalMs = (speed: number) => REPLAY_BASE_STEP_MS / speed;
 
 // ── 데이터 타입 ──────────────────────────────────────────────────────────────
-export type Candle = { date: string; o: number; h: number; l: number; c: number; v: number };
+// 정본은 shared `DailyCandle`(일→주봉 집계와 계약 공유). 기존 importer 호환 위해 별칭 유지.
+export type Candle = DailyCandle;
 export type ReplayManifest = {
   id: string;
   name: string;
@@ -37,6 +38,22 @@ export function firstIndexOnOrAfter(candles: Candle[], date: string): number {
 export function lastIndexOnOrBefore(candles: Candle[], date: string): number {
   for (let i = candles.length - 1; i >= 0; i--) if (candles[i].date <= date) return i;
   return 0;
+}
+
+// ── 차트 표시 시리즈 (일/주 토글). 재생·매매·성적은 일봉 인덱스 기준, 주봉은 표시에만. ──
+export type Timeframe = "day" | "week";
+
+// 미래 누설 금지 불변식: 커서까지(완주+"이후 보기" 시에만 tail) 자른 **뒤** 집계한다.
+// 집계 후 주(週) 필터는 금지 — 부분 주의 h/c에 커서 이후 캔들 OHLC가 새어든다.
+export function visibleSeries(
+  candles: Candle[],
+  cursor: number,
+  timeframe: Timeframe,
+  opts: { finished: boolean; revealTail: boolean },
+): Candle[] {
+  const end = opts.finished && opts.revealTail ? candles.length : cursor + 1;
+  const visible = candles.slice(0, end);
+  return timeframe === "week" ? aggregateDailyToWeekly(visible) : visible;
 }
 
 // ── 로컬 계좌·체결 (시드·현금·포지션). 매수/매도는 현금/보유의 비중(0~1)으로 조작. ──

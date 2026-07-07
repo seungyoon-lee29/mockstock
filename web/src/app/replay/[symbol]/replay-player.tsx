@@ -34,14 +34,22 @@ import {
   savePendingReplay,
   loadPendingReplay,
   clearPendingReplay,
+  visibleSeries,
   type Candle,
   type ReplayManifest,
   type ReplayAccount,
+  type Timeframe,
 } from "@/lib/replay";
 
 // 매매 프리셋 비중(현금/보유의 25·50·100%). 매직넘버 산재 방지용 단일 소스.
 const TRADE_FRACTIONS = [0.25, 0.5, 1] as const;
 const fractionLabel = (f: number) => (f === 1 ? "전량" : `${Math.round(f * 100)}%`);
+
+// 차트 타임프레임 토글(일/주). 재생·매매·성적은 일봉 인덱스 기준이고 주봉은 표시에만 영향.
+const TIMEFRAMES = [
+  { id: "day", label: "일" },
+  { id: "week", label: "주" },
+] as const satisfies readonly { id: Timeframe; label: string }[];
 
 export function ReplayPlayer({ symbol }: { symbol: string }) {
   const [data, setData] = useState<{ manifest: ReplayManifest; candles: Candle[] } | null>(null);
@@ -136,6 +144,7 @@ function ReplaySession({
   const [curve, setCurve] = useState<number[]>(() => [equityOf(initAccount(), candles[playStart].c)]);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState<number>(REPLAY_DEFAULT_SPEED);
+  const [timeframe, setTimeframe] = useState<Timeframe>("day");
   const [finished, setFinished] = useState(false);
   const [revealTail, setRevealTail] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saved" | "guest">("idle");
@@ -202,16 +211,18 @@ function ReplaySession({
   }, [finished]);
 
   // 미래 누설 금지: 현재 시점까지만. 완주 후 "이후 보기" 시에만 tail 공개.
-  const chartData = useMemo<CandlestickData<Time>[]>(() => {
-    const end = finished && revealTail ? candles.length : cursor + 1;
-    return candles.slice(0, end).map((c) => ({
-      time: c.date as Time,
-      open: c.o,
-      high: c.h,
-      low: c.l,
-      close: c.c,
-    }));
-  }, [candles, cursor, finished, revealTail]);
+  // 주봉은 커서까지 자른 일봉을 집계하므로(미래 캔들이 애초에 없음) 누설 불변식이 그대로 유지된다.
+  const chartData = useMemo<CandlestickData<Time>[]>(
+    () =>
+      visibleSeries(candles, cursor, timeframe, { finished, revealTail }).map((c) => ({
+        time: c.date as Time,
+        open: c.o,
+        high: c.h,
+        low: c.l,
+        close: c.c,
+      })),
+    [candles, cursor, finished, revealTail, timeframe],
+  );
 
   function trade(next: ReplayAccount) {
     setAccount(next);
@@ -307,6 +318,18 @@ function ReplaySession({
                     onClick={() => setSpeed(s)}
                   >
                     x{s}
+                  </Button>
+                ))}
+              </div>
+              <div className="ml-auto flex gap-1">
+                {TIMEFRAMES.map((tf) => (
+                  <Button
+                    key={tf.id}
+                    size="sm"
+                    variant={timeframe === tf.id ? "default" : "ghost"}
+                    onClick={() => setTimeframe(tf.id)}
+                  >
+                    {tf.label}
                   </Button>
                 ))}
               </div>

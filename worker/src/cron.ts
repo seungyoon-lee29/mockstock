@@ -12,11 +12,12 @@ import {
   snapshotPortfolios,
   type SeasonConfig,
 } from "@mockstock/shared";
-import { instruments } from "@mockstock/shared/schema";
+import { instruments, minuteCandles } from "@mockstock/shared/schema";
 import { getDb } from "./db";
 import { updateFxRates } from "./fx";
 
 const TZ = "Asia/Seoul";
+const MINUTE_CANDLE_RETENTION_DAYS = Math.max(1, Number(process.env.MINUTE_CANDLE_RETENTION_DAYS ?? 30));
 
 /** env 파라미터화(§4.1) — 단축 시즌·시드 조정을 코드 수정 없이. 미설정 시 주간/1,000만 기본. */
 function seasonConfig(): SeasonConfig {
@@ -65,6 +66,15 @@ async function updatePrevClose(db: NonNullable<ReturnType<typeof getDb>>): Promi
     );
 }
 
+/** ⑥ 분봉 보존 — minute_candles 에서 N일(env, 기본 30) 초과 로우 prune(무한 성장 방지). */
+async function pruneMinuteCandles(
+  db: NonNullable<ReturnType<typeof getDb>>,
+): Promise<{ deleted: number | null; retentionDays: number }> {
+  const cutoff = new Date(Date.now() - MINUTE_CANDLE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const res = await db.delete(minuteCandles).where(sql`${minuteCandles.ts} < ${cutoff}`);
+  return { deleted: (res as { rowCount?: number }).rowCount ?? null, retentionDays: MINUTE_CANDLE_RETENTION_DAYS };
+}
+
 export function startCron(): void {
   const db = getDb();
   if (!db) {
@@ -91,6 +101,8 @@ export function startCron(): void {
   cron.schedule("30 7 * * 1-5", () => void runNotified("prevClose 갱신", () => updatePrevClose(db)), { timezone: TZ });
   // ⑤ 환율 갱신 — 09:00(금 15:30 확정에 선행, §6.6).
   cron.schedule("0 9 * * 1-5", () => void runNotified("환율 갱신", () => updateFxRates(db)), { timezone: TZ });
+  // ⑥ 분봉 보존 — 매일 04:20 KST(KR 이른 새벽·장외지만 US 정규장 14:20/15:20 ET와 겹침), N일 초과 prune.
+  cron.schedule("20 4 * * *", () => void runNotified("분봉 prune", () => pruneMinuteCandles(db)), { timezone: TZ });
 
-  console.log(`[cron] 등록 완료 (Asia/Seoul, 확정 스윕 매 ${sweepMin}분)`);
+  console.log(`[cron] 등록 완료 (Asia/Seoul, 확정 스윕 매 ${sweepMin}분, 분봉 보존 ${MINUTE_CANDLE_RETENTION_DAYS}일)`);
 }

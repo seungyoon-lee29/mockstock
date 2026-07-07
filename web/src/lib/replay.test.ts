@@ -15,6 +15,7 @@ import {
   savePendingReplay,
   loadPendingReplay,
   clearPendingReplay,
+  visibleSeries,
   type Candle,
 } from "./replay";
 
@@ -82,6 +83,23 @@ test("buyAndHold 수익률: 100→120 = +20%", () => {
 test("배속 간격: 클수록 짧다", () => {
   assert.ok(stepIntervalMs(30) < stepIntervalMs(10));
   assert.ok(stepIntervalMs(10) < stepIntervalMs(1));
+});
+
+// 미래 누설 금지 불변식(§5.3): visibleSeries는 **전체** 캔들(미래 포함)을 받아도 커서까지
+// 자른 **뒤** 주봉 집계해야 한다. 집계 후 주-시작일로 필터하는 회귀(aggregate-then-filter)는
+// 부분 주의 h/c에 커서 이후 캔들(수요일 h=99·c=42)을 새어들게 하므로 이 테스트가 잡아낸다.
+test("주봉 미래 누설 없음: visibleSeries가 전체 캔들을 받아도 부분 주에 커서 이후 OHLC 미포함", () => {
+  const daily: Candle[] = [
+    { date: "2020-03-16", o: 10, h: 12, l: 9, c: 11, v: 1 }, // 월 (주1)
+    { date: "2020-03-17", o: 11, h: 13, l: 10, c: 12, v: 1 }, // 화 (주1) ← 커서
+    { date: "2020-03-18", o: 12, h: 99, l: 11, c: 42, v: 1 }, // 수 (주1) 미래 — 극단 h/c
+    { date: "2020-03-23", o: 20, h: 22, l: 19, c: 21, v: 1 }, // 다음 주 월 (주2) 미래
+  ];
+  const cursor = 1; // 화요일까지만 관측(미래 캔들 2개 포함한 전체 배열을 그대로 전달)
+  const weekly = visibleSeries(daily, cursor, "week", { finished: false, revealTail: false });
+  assert.equal(weekly.length, 1); // 다음 주(주2) 미포함
+  assert.equal(weekly[0].c, 12); // 부분 주 종가 = 커서 종가 — 수요일 c=42 미반영 (aggregate-then-filter면 42)
+  assert.equal(weekly[0].h, 13); // 부분 주 고가 = 커서까지의 max — 수요일 h=99 미반영 (aggregate-then-filter면 99)
 });
 
 test("게스트 결과 보존(§194): 저장→로드 라운드트립·손상 데이터 거부·정리", () => {

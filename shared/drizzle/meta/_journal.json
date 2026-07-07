@@ -15,6 +15,13 @@
       "when": 1783256639178,
       "tag": "0001_yielding_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783411107842,
+      "tag": "0002_complex_magik",
+      "breakpoints": true
     }
   ]
 }

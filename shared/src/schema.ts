@@ -189,6 +189,26 @@ export const replaySessions = pgTable("replay_sessions", {
   finishedAt: timestamp("finished_at", { withTimezone: true }),
 });
 
+/**
+ * 실시간 틱→1분 캔들 축적(P3-①, 멀티 타임프레임 차트). 워커가 장중에만 write(Neon 보존, B13),
+ * web 종목상세가 백필 조회. v=집계 틱 수(피드가 거래량 미제공 → 체결 건수 대용). 보존 크론이 N일 초과 prune.
+ * PK(market,symbol,ts)가 (market,symbol,ts) 범위 조회 인덱스를 겸함 → 별도 index 불필요.
+ */
+export const minuteCandles = pgTable(
+  "minute_candles",
+  {
+    market: marketEnum("market").notNull(),
+    symbol: text("symbol").notNull(),
+    ts: timestamp("ts", { withTimezone: true }).notNull(), // 분 버킷 시작
+    o: numeric("o", { precision: 18, scale: 2 }).notNull(),
+    h: numeric("h", { precision: 18, scale: 2 }).notNull(),
+    l: numeric("l", { precision: 18, scale: 2 }).notNull(),
+    c: numeric("c", { precision: 18, scale: 2 }).notNull(),
+    v: numeric("v", { precision: 20, scale: 0 }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.market, t.symbol, t.ts] })],
+);
+
 /** 환율 단일 로우 per 통화쌍. 일 1회 갱신, 빈 응답 시 직전 값 유지(B8). */
 export const fxRates = pgTable("fx_rates", {
   pair: text("pair").primaryKey(), // "USDKRW"
