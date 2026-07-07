@@ -34,7 +34,7 @@
       "UBER",
       "SBUX"
     ],
-    "KR": "pending — 공공데이터포털 금융위 API 키 필요"
+    "KR": "pending — 공공데이터포털 금융위 주식시세정보(15094808) 키 필요 (ADR-0003 참조)"
   },
   "source": {
     "provider": "Stooq",
