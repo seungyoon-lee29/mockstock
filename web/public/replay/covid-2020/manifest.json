@@ -17,19 +17,38 @@
   },
   "symbols": {
     "US": [
-      "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META",
-      "TSLA", "AVGO", "AMD", "NFLX", "JPM", "V",
-      "DIS", "KO", "UBER", "SBUX"
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "GOOGL",
+      "AMZN",
+      "META",
+      "TSLA",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "JPM",
+      "V",
+      "DIS",
+      "KO",
+      "UBER",
+      "SBUX"
     ],
     "KR": "pending — 공공데이터포털 금융위 API 키 필요"
   },
   "source": {
-    "provider": "Yahoo Finance (yfinance)",
-    "note": "PRD §8 지정 Stooq CSV가 JS PoW 챌린지로 자동화 접근 차단됨에 따라 Yahoo Finance 분할조정 일봉으로 대체. 데이터는 split-adjusted 종가 기준.",
-    "fetchedAt": "2026-07-05"
+    "provider": "Stooq",
+    "note": "Stooq 일봉 CSV(https://stooq.com/q/d/l/?s=<sym>.us&d1=20191202&d2=20200930&i=d) → stooq-to-replay-json.mjs 변환.",
+    "fetchedAt": "2026-07-07"
   },
   "symbolExclusions": [
-    { "symbol": "PLTR", "reason": "2020-09-30 직상장 — 시나리오 시작 시점 미상장" },
-    { "symbol": "COIN", "reason": "2021-04-14 상장 — 시나리오 기간 외 미상장" }
+    {
+      "symbol": "PLTR",
+      "reason": "2020-09-30 직상장 — 시나리오 시작 시점 미상장"
+    },
+    {
+      "symbol": "COIN",
+      "reason": "2021-04-14 상장 — 시나리오 기간 외 미상장"
+    }
   ]
 }
