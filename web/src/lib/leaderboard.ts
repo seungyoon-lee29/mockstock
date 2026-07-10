@@ -1,5 +1,5 @@
 // 리더보드 스냅샷 순수 로직 (PRD §9 데이터 경로) — DB·네트워크 없이 단위 테스트 가능.
-// 서버는 평가액을 계산하지 않는다: 원시 {cashKrw, reservedKrw, positions, fxRate}만 실어 보내고
+// 서버는 평가액을 계산하지 않는다: 원시 {cash, reserved, positions}만 실어 보내고
 // 클라이언트가 구독 중인 SSE 가격으로 전원 평가액을 로컬 재계산한다(§9).
 import type { Market } from "@mockstock/shared";
 
@@ -25,6 +25,7 @@ export const LEADERBOARD_POLL_MS = 20_000;
 // ── DB 로우 입력 형태 (drizzle select 결과와 정합) ──
 export interface SeasonMetaRow {
   id: string;
+  market: Market;
   startsAt: Date;
   endsAt: Date;
   seedMoney: string;
@@ -35,18 +36,18 @@ export interface AccountRow {
   isBot: boolean;
   isAnonymous: boolean;
   joinedAt: Date;
-  cashKrw: string;
+  cash: string;
 }
 export interface ReservedRow {
   userId: string;
-  reservedKrw: string | null; // open 매수 주문 reservedKrw SUM (SQL 집계, null=합산 대상 없음)
+  reserved: string | null; // open 매수 주문 reserved SUM (SQL 집계, null=합산 대상 없음)
 }
 export interface PositionRow {
   userId: string;
   market: Market;
   symbol: string;
   qty: string;
-  costBasisKrw: string;
+  costBasis: string;
 }
 
 // ── 응답 형태 ──
@@ -54,39 +55,37 @@ export interface PositionOut {
   market: Market;
   symbol: string;
   qty: string;
-  costBasisKrw: string;
+  costBasis: string;
 }
 export interface Participant {
   userId: string;
   name: string | null;
   isBot: boolean;
   joinedAt: string;
-  cashKrw: string;
-  reservedKrw: string;
+  cash: string;
+  reserved: string;
   positions: PositionOut[];
 }
 export interface LeaderboardResponse {
-  season: { id: string; startsAt: string; endsAt: string; seedMoney: string };
-  fxRate: number;
+  season: { id: string; market: Market; startsAt: string; endsAt: string; seedMoney: string };
   participants: Participant[];
 }
 
 /**
  * DB 로우들을 리더보드 응답 셰이프로 조립한다.
  * - 익명(게스트) 참가자 제외(§5.4 — 지표·순위 대상 아님).
- * - reservedKrw 없으면 "0"(open 매수 주문 없음), positions 없으면 [].
+ * - reserved 없으면 "0"(open 매수 주문 없음), positions 없으면 [].
  */
 export function buildLeaderboard(
   season: SeasonMetaRow,
-  fxRate: number,
   accounts: AccountRow[],
   reserved: ReservedRow[],
   positions: PositionRow[],
 ): LeaderboardResponse {
-  const reservedByUser = new Map(reserved.map((r) => [r.userId, r.reservedKrw ?? "0"]));
+  const reservedByUser = new Map(reserved.map((r) => [r.userId, r.reserved ?? "0"]));
   const posByUser = new Map<string, PositionOut[]>();
   for (const p of positions) {
-    const out: PositionOut = { market: p.market, symbol: p.symbol, qty: p.qty, costBasisKrw: p.costBasisKrw };
+    const out: PositionOut = { market: p.market, symbol: p.symbol, qty: p.qty, costBasis: p.costBasis };
     const arr = posByUser.get(p.userId);
     if (arr) arr.push(out);
     else posByUser.set(p.userId, [out]);
@@ -99,19 +98,19 @@ export function buildLeaderboard(
       name: a.name,
       isBot: a.isBot,
       joinedAt: a.joinedAt.toISOString(),
-      cashKrw: a.cashKrw,
-      reservedKrw: reservedByUser.get(a.userId) ?? "0",
+      cash: a.cash,
+      reserved: reservedByUser.get(a.userId) ?? "0",
       positions: posByUser.get(a.userId) ?? [],
     }));
 
   return {
     season: {
       id: season.id,
+      market: season.market,
       startsAt: season.startsAt.toISOString(),
       endsAt: season.endsAt.toISOString(),
       seedMoney: season.seedMoney,
     },
-    fxRate,
     participants,
   };
 }
@@ -122,22 +121,21 @@ export interface RankedParticipant {
   userId: string;
   name: string | null;
   isBot: boolean;
-  totalValueKrw: number;
-  returnKrw: number;
+  totalValue: number;
+  returnAbs: number;
   returnPct: number;
 }
 
 /**
  * 참가자별 평가액·수익률을 계산하고 수익률 내림차순으로 순위를 매긴다(§9 클라 로컬 평가).
- * - 평가액 = 현금 + 예약현금 + Σ(보유수량 × 현재가 × (US ? fxRate : 1)).
- * - 현재가 미도착(priceOf → undefined)이면 해당 보유는 취득원가(costBasisKrw)로 평가 → 등락 0.
+ * - 평가액 = 현금 + 예약현금 + Σ(보유수량 × 현재가). 리그별 단일 통화 — 환산 없음.
+ * - 현재가 미도착(priceOf → undefined)이면 해당 보유는 취득원가(costBasis)로 평가 → 등락 0.
  *   (전 종목 시세가 도착하기 전 순위가 -100%로 튀는 것을 방지, seasons.ts 마크투마켓과 동일 규약.)
  * - 수익률 = (평가액 − 시드) / 시드 × 100. 동률은 userId 오름차순으로 결정적 정렬(폴링 간 행 흔들림 방지).
  * 평가액은 표시 전용(원장 미기록)이라 float 곱을 그대로 쓴다 — seasons.ts holdingsCents 와 동일 판단.
  */
 export function rankParticipants(
   participants: Participant[],
-  fxRate: number,
   seedMoney: number,
   priceOf: (market: Market, symbol: string) => number | undefined,
 ): RankedParticipant[] {
@@ -146,20 +144,18 @@ export function rankParticipants(
       let holdings = 0;
       for (const pos of p.positions) {
         const price = priceOf(pos.market, pos.symbol);
-        holdings +=
-          price == null
-            ? Number(pos.costBasisKrw)
-            : Number(pos.qty) * price * (pos.market === "US" ? fxRate : 1);
+        // ponytail: 리그별 단일 통화 — 환산 없이 qty*price. US 시즌이면 USD, KR 시즌이면 KRW.
+        holdings += price == null ? Number(pos.costBasis) : Number(pos.qty) * price;
       }
-      const totalValueKrw = Number(p.cashKrw) + Number(p.reservedKrw) + holdings;
-      const returnKrw = totalValueKrw - seedMoney;
+      const totalValue = Number(p.cash) + Number(p.reserved) + holdings;
+      const returnAbs = totalValue - seedMoney;
       return {
         userId: p.userId,
         name: p.name,
         isBot: p.isBot,
-        totalValueKrw,
-        returnKrw,
-        returnPct: seedMoney > 0 ? (returnKrw / seedMoney) * 100 : 0,
+        totalValue,
+        returnAbs,
+        returnPct: seedMoney > 0 ? (returnAbs / seedMoney) * 100 : 0,
       };
     })
     .sort((a, b) => b.returnPct - a.returnPct || a.userId.localeCompare(b.userId))
