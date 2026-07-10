@@ -1,6 +1,6 @@
 "use client";
 
-// 시즌 리더보드 — 서버는 원시 {현금·예약·보유·fxRate}만 주고, 클라가 구독 중인 SSE 현재가로
+// 시즌 리더보드 — 서버는 원시 {현금·예약·보유}만 주고, 클라가 구독 중인 SSE 현재가로
 // 전원 평가액을 로컬 재계산해 순위를 매긴다(§9). 순위/닉네임/수익률(등락색)/수익금 + BOT 배지,
 // 내 순위 하이라이트, 시즌 카운트다운, 주기 폴링(react-query refetchInterval) + 수동 새로고침.
 import { useEffect, useMemo, useState } from "react";

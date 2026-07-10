@@ -66,10 +66,9 @@ curl https://<worker-domain>/health
 | `FINNHUB_API_KEY` | secret | 선택 | US 실시세. **worker 전용(web 금지)**. 없으면 mock 폴백. |
 | `KIS_APP_KEY` | secret | 선택 | KR 실시세 앱키. **worker 전용**. 없으면 mock 폴백. |
 | `KIS_APP_SECRET` | secret | 선택 | KIS 앱시크릿. **worker 전용**, 로그 노출 금지. |
-| `EXIM_API_KEY` | secret | 선택 | 한국수출입은행 고시환율 1순위. 없으면 frankfurter 무키 폴백. |
 | `DISCORD_WEBHOOK_URL` | secret | 선택 | 크론 완료·실패 통지. URL 자체가 자격증명. 없으면 콘솔 로그. |
 | `SEASON_DURATION_MS` | config | 선택 | 시즌 고정 길이(ms). 미설정=주간(월 00:00→금 15:30 KST). |
-| `SEASON_SEED_KRW` | config | 선택 | 시드머니. 미설정=1,000만. |
+| `SEASON_SEED_KRW` | config | 선택 | KR 리그 한정 시드머니(KRW). 미설정=1,000만. US 시즌에는 적용되지 않고 SEED_MONEY.US 기본값을 사용한다. |
 | `BOT_COUNT` | config | 선택 | 벤치마크 봇 수. 미설정=3. `DATABASE_URL` 없으면 자동 비활성. |
 | `BOT_INTERVAL_SEC` | config | 선택 | 봇 매매 주기(초). 미설정=45. |
 | `BOT_ORDER_PCT` | config | 선택 | 봇 1회 주문 비율. 미설정=0.1. |
@@ -169,5 +168,4 @@ Next.js 16 네이티브 배포. `output: standalone`·어댑터 불필요. `shar
 
 - **fail-closed 부팅 게이트 + 무조건 인증**: **코드로 강제됨**(0-1). 프로덕션에서 `WORKER_SECRET`·`CORS_ORIGIN` 미설정 시 부팅 실패, `/internal/orders/sync`는 시크릿 없으면 무조건 401.
 - **실시세 연동**(`FEED_*`=kis/finnhub + 키): 키 발급 후 worker env만 교체. web 무관.
-- **fx.ts 서드파티 엔드포인트**(koreaexim.go.kr, frankfurter.app): 벤더 고정 URL이라 env화 안 함. 하드코딩 금지 원칙상 상수화 여지는 있으나 배포 차단 아님.
 - **`.env.example`**: web/worker 양쪽 모두 소비 변수 100% 문서화됨. 로컬 개발용 템플릿이며 실값은 `.env`(gitignore)에만.

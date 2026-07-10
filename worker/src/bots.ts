@@ -77,6 +77,16 @@ function seasonConfig(): SeasonConfig {
   };
 }
 
+/**
+ * SEASON_SEED_KRW는 KR 리그 한정 — US 시즌은 seedMoney를 undefined로 두어 SEED_MONEY.US 기본값 사용.
+ * cron.ts cfgFor()와 동일 로직(두 파일이 같은 시즌 cfg를 공유).
+ */
+function cfgFor(cfg: SeasonConfig, market: Market): SeasonConfig {
+  if (market === "KR") return cfg;
+  const { seedMoney: _omit, ...rest } = cfg;
+  return rest;
+}
+
 export function buildBots(count: number): BotDef[] {
   const bots: BotDef[] = [];
   for (let i = 0; i < count; i++) {
@@ -266,7 +276,8 @@ export function startBots(book: PriceBook): void {
       for (const market of ["KR", "US"] as Market[]) {
         const legPriced = priced.filter((p) => p.entry.market === market);
         if (legPriced.length === 0) continue;
-        const season = await ensureActiveSeason(db!, cfg, market);
+        const season = await ensureActiveSeason(db!, cfgFor(cfg, market), market);
+        if (season.status !== "active") continue; // finalized 시즌 체결 방지(mock 피드·주말 대비)
         if (seededSeason[market] !== season.id) { await seedAccounts(season); seededSeason[market] = season.id; }
         const budget = Number(season.seedMoney) * orderPct;
         const holdings = await loadHoldings(db!, season.id, botIds);

@@ -42,7 +42,7 @@ export type PlaceLimitResult =
 
 /**
  * 지정가 주문을 접수한다(단일 트랜잭션). 성공 시 status='open' 주문 1건이 생긴다.
- * 멱등키 충돌(UNIQUE(user_id, key))은 insert에서 throw → 호출부가 원본 결과 멱등 재생(§6.1).
+ * 멱등키 충돌(UNIQUE(user_id, season_id, idempotency_key))은 insert에서 throw → 호출부가 원본 결과 멱등 재생(§6.1).
  */
 export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<PlaceLimitResult> {
   const { orderId, userId, seasonId, market, symbol, side, qty, limitPrice } = i;
