@@ -12,7 +12,6 @@ import {
   UNIVERSE,
   keyOf,
   ensureActiveSeason,
-  FX_PAIR_USDKRW,
   type Market,
   type Side,
   type Tick,
@@ -22,7 +21,7 @@ import {
 } from "@mockstock/shared";
 import { isMarketOpen } from "@mockstock/shared/calendar";
 import { fillOrder } from "@mockstock/shared/fillOrder";
-import { accounts, fxRates, orders, positions, users } from "@mockstock/shared/schema";
+import { accounts, orders, positions, users } from "@mockstock/shared/schema";
 import { getDb } from "./db";
 import type { PriceBook } from "./priceBook";
 
@@ -116,29 +115,22 @@ function tradeable(book: PriceBook): Priced[] {
   return out;
 }
 
-function fxOf(market: Market, usdKrw: number): number {
-  return market === "US" ? usdKrw : 1; // KR은 원화 그대로
-}
-
-/** 주문 예산(KRW)으로 살 수 있는 정수 주수. US인데 환율 없으면 0(스킵). */
-export function buyQty(p: Priced, usdKrw: number, budgetKrw: number): number {
-  const fx = fxOf(p.entry.market, usdKrw);
-  if (fx <= 0) return 0;
-  const priceKrw = p.tick.price * fx;
-  return priceKrw > 0 ? Math.floor(budgetKrw / priceKrw) : 0;
+/** 주문 예산(네이티브 통화)으로 살 수 있는 정수 주수. 리그별 지갑이라 환산 없음. */
+export function buyQty(p: Priced, budget: number): number {
+  const price = p.tick.price;
+  return price > 0 ? Math.floor(budget / price) : 0;
 }
 
 function heldQty(holdings: Map<string, number>, userId: string, entry: UniverseEntry): number {
   return holdings.get(`${userId}|${keyOf(entry.market, entry.symbol)}`) ?? 0;
 }
 
-/** 전략별 주문 의도(0~2건). 매수 qty는 예산 기준, 매도 qty는 보유 전량. */
+/** 전략별 주문 의도(0~2건). 매수 qty는 예산 기준, 매도 qty는 보유 전량. budget은 네이티브 통화. */
 export function decide(
   bot: BotDef,
   market: Priced[],
   holdings: Map<string, number>,
-  usdKrw: number,
-  budgetKrw: number,
+  budget: number,
 ): Intent[] {
   if (bot.strategy === "random") {
     // 유니버스 균등 추첨. 보유 종목이면 일부 확률로 매도(체결 엔진 매도 경로 자가 테스트).
@@ -146,7 +138,7 @@ export function decide(
     if (!pick) return [];
     const held = heldQty(holdings, bot.id, pick.entry);
     if (held > 0 && Math.random() < 0.4) return [{ ...pick, side: "sell", qty: held }];
-    const qty = buyQty(pick, usdKrw, budgetKrw);
+    const qty = buyQty(pick, budget);
     return qty >= 1 ? [{ ...pick, side: "buy", qty }] : [];
   }
 
@@ -166,7 +158,7 @@ export function decide(
     // 등락률 상위 매수.
     const top = scored.filter((s) => s.chg > 0).sort((a, b) => b.chg - a.chg)[0];
     if (top) {
-      const qty = buyQty(top, usdKrw, budgetKrw);
+      const qty = buyQty(top, budget);
       if (qty >= 1) intents.push({ entry: top.entry, tick: top.tick, side: "buy", qty });
     }
     return intents;
@@ -176,13 +168,12 @@ export function decide(
   const candidates = market.filter((p) => TOPCAP_KEYS.has(keyOf(p.entry.market, p.entry.symbol)));
   const pick = candidates[Math.floor(Math.random() * candidates.length)];
   if (!pick) return [];
-  const qty = buyQty(pick, usdKrw, budgetKrw);
+  const qty = buyQty(pick, budget);
   return qty >= 1 ? [{ ...pick, side: "buy", qty }] : [];
 }
 
 /** market 주문 insert + fillOrder 직접 호출(web 시장가와 동일 경로). 거절은 정상 — 로그만. */
-async function place(db: Db, bot: BotDef, seasonId: string, it: Intent, usdKrw: number): Promise<void> {
-  const fx = fxOf(it.entry.market, usdKrw);
+async function place(db: Db, bot: BotDef, seasonId: string, it: Intent): Promise<void> {
   const orderId = randomUUID();
   await db.insert(orders).values({
     id: orderId,
@@ -193,7 +184,6 @@ async function place(db: Db, bot: BotDef, seasonId: string, it: Intent, usdKrw: 
     side: it.side,
     type: "market",
     qty: String(it.qty),
-    fxRate: String(fx),
     idempotencyKey: orderId, // 봇은 재시도 없음 — 주문 id를 그대로 멱등키로
   });
   const res = await fillOrder(db, {
@@ -206,7 +196,6 @@ async function place(db: Db, bot: BotDef, seasonId: string, it: Intent, usdKrw: 
     orderType: "market",
     qty: it.qty,
     filledPrice: it.tick.price,
-    fxRate: fx,
   });
   if (!res.ok) console.log(`[bots] ${bot.name} ${it.side} ${it.entry.symbol} 스킵: ${res.reason}`);
 }
@@ -219,15 +208,6 @@ async function loadHoldings(db: Db, seasonId: string, botIds: string[]): Promise
   const m = new Map<string, number>();
   for (const r of rows) m.set(`${r.userId}|${keyOf(r.market, r.symbol)}`, Number(r.qty));
   return m;
-}
-
-/** USDKRW 캐시(5분). 없으면 0 → US 주문은 스킵(환율 없이 체결 금지, B8). */
-async function usdKrwOf(db: Db, cache: { rate: number; at: number }): Promise<number> {
-  if (Date.now() - cache.at < 5 * 60 * 1000) return cache.rate;
-  const [row] = await db.select({ rate: fxRates.rate }).from(fxRates).where(eq(fxRates.pair, FX_PAIR_USDKRW));
-  cache.rate = row ? Number(row.rate) : 0;
-  cache.at = Date.now();
-  return cache.rate;
 }
 
 /**
@@ -252,9 +232,9 @@ export function startBots(book: PriceBook): void {
   const orderPct = envFloat("BOT_ORDER_PCT", 0.1);
   const cfg = seasonConfig();
   const botIds = bots.map((b) => b.id);
-  const fxCache = { rate: 0, at: 0 };
   let seededUsers = false;
-  let seededSeason: string | null = null;
+  // ponytail: Record per market — KR·US 시즌 id를 각각 추적해 리그 혼합 방지.
+  const seededSeason: Record<Market, string | null> = { KR: null, US: null };
   let running = false;
 
   // 봇별 이름이 달라 values 일괄 + 단일 set 이 불가 → 개별 멱등 upsert(전략 노출 배지 최신화).
@@ -270,34 +250,30 @@ export function startBots(book: PriceBook): void {
   async function seedAccounts(season: SeasonRow): Promise<void> {
     await db!
       .insert(accounts)
-      .values(bots.map((b) => ({ userId: b.id, seasonId: season.id, cashKrw: season.seedMoney })))
+      .values(bots.map((b) => ({ userId: b.id, seasonId: season.id, cash: season.seedMoney })))
       .onConflictDoNothing(); // 이미 있으면 유지(리셋 크론이 시드 재설정 담당)
   }
 
   async function loop(): Promise<void> {
     if (running) return;
     // 닫힌 시장이면 DB 안 건드림(Neon autosuspend 보존, B13) — 인메모리 시세북만 확인.
-    const market = tradeable(book);
-    if (market.length === 0) return;
+    const priced = tradeable(book);
+    if (priced.length === 0) return;
 
     running = true;
     try {
-      const season = await ensureActiveSeason(db!, cfg);
-      if (!seededUsers) {
-        await seedUsersEach();
-        seededUsers = true;
-      }
-      if (seededSeason !== season.id) {
-        await seedAccounts(season);
-        seededSeason = season.id;
-      }
-
-      const usdKrw = await usdKrwOf(db!, fxCache);
-      const budgetKrw = Number(season.seedMoney) * orderPct;
-      const holdings = await loadHoldings(db!, season.id, botIds);
-      for (const bot of bots) {
-        for (const it of decide(bot, market, holdings, usdKrw, budgetKrw)) {
-          await place(db!, bot, season.id, it, usdKrw);
+      if (!seededUsers) { await seedUsersEach(); seededUsers = true; }
+      for (const market of ["KR", "US"] as Market[]) {
+        const legPriced = priced.filter((p) => p.entry.market === market);
+        if (legPriced.length === 0) continue;
+        const season = await ensureActiveSeason(db!, cfg, market);
+        if (seededSeason[market] !== season.id) { await seedAccounts(season); seededSeason[market] = season.id; }
+        const budget = Number(season.seedMoney) * orderPct;
+        const holdings = await loadHoldings(db!, season.id, botIds);
+        for (const bot of bots) {
+          for (const it of decide(bot, legPriced, holdings, budget)) {
+            await place(db!, bot, season.id, it);
+          }
         }
       }
     } catch (e) {
