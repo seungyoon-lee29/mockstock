@@ -1,4 +1,6 @@
 -- CLEAN CUTOVER: 컬럼 DROP+ADD = 기존 데이터 폐기(E1 런북). 출시 전 개발 DB라 허용.
+-- 클린 컷오버 실행부: 구 KRW 통합 포맷 게임 데이터 폐기(시즌·계좌·주문·포지션·스냅샷·랭킹). users/auth/instruments/watchlist/replay는 보존.
+TRUNCATE TABLE "orders", "positions", "portfolio_snapshots", "season_results", "accounts", "seasons" CASCADE;--> statement-breakpoint
 ALTER TABLE "seasons" ADD COLUMN "market" "market" NOT NULL;--> statement-breakpoint
 ALTER TABLE "accounts" DROP CONSTRAINT "cash_krw_non_negative";--> statement-breakpoint
 ALTER TABLE "accounts" DROP COLUMN "cash_krw";--> statement-breakpoint
