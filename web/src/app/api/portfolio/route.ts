@@ -1,10 +1,10 @@
-// GET /api/portfolio — 세션 유저의 활성 시즌 포트폴리오(계좌·보유·미체결·실현손익).
+// GET /api/portfolio?league=us|kr — 세션 유저의 활성 리그 시즌 포트폴리오(계좌·보유·미체결·실현손익).
 // 신뢰 경계(db.md): userId=세션에서만, seasonId=서버 active 시즌. 금액은 numeric 문자열 그대로 반환.
-// 평가액은 계산하지 않는다 — 클라가 SSE 가격·fxRate로 로컬 재계산(§9). 부수효과 없음(계좌 lazy upsert 안 함).
+// 평가액은 계산하지 않는다 — 클라가 SSE 가격으로 로컬 재계산(§9). 부수효과 없음(계좌 lazy upsert 안 함).
 import type { NextRequest } from "next/server";
 import { and, desc, eq, gt, sum } from "drizzle-orm";
-import { FX_PAIR_USDKRW } from "@mockstock/shared";
-import { accounts, fxRates, orders, positions, seasons } from "@mockstock/shared/schema";
+import { accounts, orders, positions, seasons } from "@mockstock/shared/schema";
+import type { Market } from "@mockstock/shared";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { buildPortfolio } from "@/lib/portfolio";
@@ -23,34 +23,41 @@ export async function GET(req: NextRequest): Promise<Response> {
     return json(401, { message: "로그인이 필요합니다." });
   }
   const userId = session.user.id;
+
+  // 리그 파싱 — us|kr 외 400.
+  const url = new URL(req.url);
+  const league = url.searchParams.get("league");
+  const market: Market | null = league === "us" ? "US" : league === "kr" ? "KR" : null;
+  if (!market) return json(400, { message: "리그를 지정해 주세요." });
+
   const db = getDb();
 
-  // 서버가 active 시즌 결정(없으면 404 — 시즌 생성은 크론 몫).
+  // 서버가 active 리그 시즌 결정(없으면 404 — 시즌 생성은 크론 몫).
   const [season] = await db
     .select({
       id: seasons.id,
+      market: seasons.market,
       startsAt: seasons.startsAt,
       endsAt: seasons.endsAt,
       seedMoney: seasons.seedMoney,
     })
     .from(seasons)
-    .where(eq(seasons.status, "active"))
+    .where(and(eq(seasons.status, "active"), eq(seasons.market, market)))
     .orderBy(desc(seasons.startsAt))
     .limit(1);
   if (!season) return json(404, { message: "진행 중인 시즌이 없습니다." });
 
   // 시즌 스코프 집계·목록은 서로 독립 → 병렬 조회.
-  const [fxRows, accountRows, reservedRows, realizedRows, positionRows, openOrderRows] =
+  const [accountRows, reservedRows, realizedRows, positionRows, openOrderRows] =
     await Promise.all([
-      db.select({ rate: fxRates.rate }).from(fxRates).where(eq(fxRates.pair, FX_PAIR_USDKRW)).limit(1),
       db
-        .select({ cashKrw: accounts.cashKrw })
+        .select({ cash: accounts.cash })
         .from(accounts)
         .where(and(eq(accounts.userId, userId), eq(accounts.seasonId, season.id)))
         .limit(1),
-      // open 매수 주문 reservedKrw SUM(예약 현금). numeric 합산은 Postgres에 위임(정확).
+      // open 매수 주문 reserved SUM(예약 현금). numeric 합산은 Postgres에 위임(정확).
       db
-        .select({ v: sum(orders.reservedKrw) })
+        .select({ v: sum(orders.reserved) })
         .from(orders)
         .where(
           and(
@@ -71,7 +78,7 @@ export async function GET(req: NextRequest): Promise<Response> {
           market: positions.market,
           symbol: positions.symbol,
           qty: positions.qty,
-          costBasisKrw: positions.costBasisKrw,
+          costBasis: positions.costBasis,
           realizedPnl: positions.realizedPnl,
         })
         .from(positions)
@@ -85,8 +92,7 @@ export async function GET(req: NextRequest): Promise<Response> {
           type: orders.type,
           qty: orders.qty,
           limitPrice: orders.limitPrice,
-          reservedKrw: orders.reservedKrw,
-          fxRate: orders.fxRate,
+          reserved: orders.reserved,
           createdAt: orders.createdAt,
         })
         .from(orders)
@@ -94,13 +100,10 @@ export async function GET(req: NextRequest): Promise<Response> {
         .orderBy(desc(orders.createdAt)),
     ]);
 
-  const fxRate = fxRows[0] ? Number(fxRows[0].rate) : 0;
-
   return Response.json(
     buildPortfolio(
       season,
-      fxRate,
-      accountRows[0]?.cashKrw ?? null,
+      accountRows[0]?.cash ?? null,
       reservedRows[0]?.v ?? null,
       realizedRows[0]?.v ?? null,
       positionRows,
