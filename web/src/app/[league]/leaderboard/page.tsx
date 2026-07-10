@@ -8,5 +8,5 @@ export default async function LeagueLeaderboardPage({ params }: { params: Promis
   const { league } = await params;
   const market = league === "us" ? "US" : league === "kr" ? "KR" : null;
   if (!market) notFound();
-  return <main className="flex-1"><LeaderboardView league={league} market={market} /></main>;
+  return <main className="flex-1"><LeaderboardView league={league} /></main>;
 }

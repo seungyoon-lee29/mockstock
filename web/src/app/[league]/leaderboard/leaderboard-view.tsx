@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { keyOf, type Market } from "@mockstock/shared";
+// ponytail: Market import kept for usePrices(symbols) position.market lookup, not for parameter.
 import { usePrices } from "@/lib/market/usePrices";
 import { formatPct, formatSignedPrice } from "@/lib/market/format";
 import {
@@ -39,7 +40,7 @@ function formatCountdown(ms: number): string {
   return `${d > 0 ? `${d}일 ` : ""}${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-export function LeaderboardView({ league, market }: { league: string; market: Market }) {
+export function LeaderboardView({ league }: { league: string }) {
   const session = authClient.useSession();
   const myId = session.data?.user?.id;
 
