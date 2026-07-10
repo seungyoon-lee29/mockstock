@@ -27,7 +27,8 @@ const LEAGUE_COOKIE = "league"; // 기본 KR
 function leagueFromPath(pathname: string): string {
   const seg = pathname.split("/")[1];
   if (seg === "kr" || seg === "us") return seg;
-  // 클라이언트에서 쿠키 읽기
+  // 클라이언트에서 쿠키 읽기 (SSR guard: document 없을 수 있음)
+  if (typeof document === "undefined") return "kr";
   const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${LEAGUE_COOKIE}=([^;]+)`));
   return match?.[1] ?? "kr";
 }

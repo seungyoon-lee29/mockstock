@@ -39,15 +39,15 @@ function formatCountdown(ms: number): string {
   return `${d > 0 ? `${d}일 ` : ""}${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
-export function LeaderboardView() {
+export function LeaderboardView({ league, market }: { league: string; market: Market }) {
   const session = authClient.useSession();
   const myId = session.data?.user?.id;
 
   const { data, status, isFetching, refetch } = useQuery({
-    queryKey: ["leaderboard"],
+    queryKey: ["leaderboard", league],
     refetchInterval: LEADERBOARD_POLL_MS,
     queryFn: async ({ signal }): Promise<LeaderboardResponse | null> => {
-      const res = await fetch(LEADERBOARD_ENDPOINT, { signal });
+      const res = await fetch(`${LEADERBOARD_ENDPOINT}?league=${league}`, { signal });
       if (res.status === 404) return null; // 시즌 준비 중(active 시즌 없음 / DB 미설정)
       if (!res.ok) throw new Error("리더보드를 불러오지 못했습니다");
       return res.json();
@@ -76,7 +76,6 @@ export function LeaderboardView() {
     if (!data) return [];
     return rankParticipants(
       data.participants,
-      data.fxRate,
       Number(data.season.seedMoney),
       (m, s) => quotes[keyOf(m, s)]?.price,
     );
@@ -156,8 +155,8 @@ export function LeaderboardView() {
                           <Badge className="bg-brand text-brand-foreground">나</Badge>
                         )}
                       </div>
-                      <PriceText change={row.returnKrw} className="text-xs">
-                        {formatSignedPrice(row.returnKrw, "KRW")}
+                      <PriceText change={row.returnAbs} className="text-xs">
+                        {formatSignedPrice(row.returnAbs, league === "us" ? "USD" : "KRW")}
                       </PriceText>
                     </div>
                     <PriceText
