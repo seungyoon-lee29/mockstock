@@ -1,12 +1,12 @@
 // POST /api/orders — 주문 접수. 시장가(T04): 워커 스냅샷가로 즉시 체결. 지정가(T08): 예약·접수 후
-// 워커 매칭 루프가 체결(§6.1). 신뢰 경계(§6.1·db.md): userId=세션, seasonId=서버 active 시즌.
+// 워커 매칭 루프가 체결(§6.1). 신뢰 경계(§6.1·db.md): userId=세션, seasonId=서버가 market으로 도출.
 // 클라 입력은 6필드뿐(market·symbol·side·qty·limitPrice·idempotencyKey), 체결가는 워커만(클라 가격 금지).
 import type { NextRequest } from "next/server";
 import { and, eq } from "drizzle-orm";
-import { SEED_MONEY_KRW } from "@mockstock/shared";
+import { SEED_MONEY } from "@mockstock/shared";
 import { isMarketOpen } from "@mockstock/shared/calendar";
 import { fillOrder } from "@mockstock/shared/fillOrder";
-import { accounts, fxRates, orders, seasons } from "@mockstock/shared/schema";
+import { accounts, orders, seasons } from "@mockstock/shared/schema";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
 import { fetchSnapshot, pushOrderSync } from "@/lib/market/workerClient";
@@ -68,42 +68,28 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const db = getDb();
 
-  // 3. 서버가 active 시즌 결정. 없으면 접수 불가(시즌 생성은 리셋 크론/T06 몫).
+  // 3. 서버가 주문 리그(market)의 active 시즌 결정. 없으면 접수 불가(시즌 생성은 리셋 크론 몫).
   const [season] = await db
     .select({ id: seasons.id })
     .from(seasons)
-    .where(eq(seasons.status, "active"))
+    .where(and(eq(seasons.status, "active"), eq(seasons.market, market)))
     .limit(1);
   if (!season) return json(409, { message: "진행 중인 시즌이 없습니다." });
   const seasonId = season.id;
 
-  // 4. 시즌 계좌 lazy upsert — 첫 진입 시 시드 지급(§4.4). 이미 있으면 무변경.
+  // 4. 시즌 계좌 lazy upsert — 첫 진입 시 리그 네이티브 시드 지급(§4.4). 이미 있으면 무변경.
   await db
     .insert(accounts)
-    .values({ userId, seasonId, cashKrw: SEED_MONEY_KRW.toFixed(2) })
+    .values({ userId, seasonId, cash: SEED_MONEY[market].toFixed(2) })
     .onConflictDoNothing();
 
-  // 5. 멱등: 같은 (userId, idempotencyKey) 주문이 있으면 원본 결과 재생(§6.1).
+  // 5. 멱등: 같은 (userId, seasonId, idempotencyKey) 주문이 있으면 원본 결과 재생(§6.1).
   const [existing] = await db
     .select({ id: orders.id, status: orders.status })
     .from(orders)
-    .where(and(eq(orders.userId, userId), eq(orders.idempotencyKey, idempotencyKey)))
+    .where(and(eq(orders.userId, userId), eq(orders.seasonId, seasonId), eq(orders.idempotencyKey, idempotencyKey)))
     .limit(1);
   if (existing) return replay(existing);
-
-  // 6. 환율: US는 fx_rates 로우 필수(없으면 차단, §6.6). KR은 1. 매수 지정가/시장가는 이 값을 고정.
-  let fxRate = 1;
-  if (market === "US") {
-    const [fx] = await db
-      .select({ rate: fxRates.rate })
-      .from(fxRates)
-      .where(eq(fxRates.pair, "USDKRW"))
-      .limit(1);
-    if (!fx) {
-      return json(422, { message: "환율 정보를 불러올 수 없어 미국 주문을 접수할 수 없습니다." });
-    }
-    fxRate = Number(fx.rate);
-  }
 
   const orderId = crypto.randomUUID();
 
@@ -121,7 +107,6 @@ export async function POST(req: NextRequest): Promise<Response> {
         side,
         qty,
         limitPrice,
-        fxRate,
         idempotencyKey,
       });
     } catch (e) {
@@ -130,7 +115,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         const [dup] = await db
           .select({ id: orders.id, status: orders.status })
           .from(orders)
-          .where(and(eq(orders.userId, userId), eq(orders.idempotencyKey, idempotencyKey)))
+          .where(and(eq(orders.userId, userId), eq(orders.seasonId, seasonId), eq(orders.idempotencyKey, idempotencyKey)))
           .limit(1);
         if (dup) return replay(dup);
       }
@@ -151,8 +136,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       side,
       qty: String(qty),
       limitPrice: String(limitPrice),
-      fxRate: side === "buy" ? String(fxRate) : null,
-      reservedKrw: null, // 워커는 reservedKrw를 DB에서 재조회(CAS RETURNING) — 캐시엔 불필요.
+      reserved: null, // 워커가 DB에서 재조회(CAS RETURNING) — 캐시엔 불필요.
     });
 
     // §5.5 장외 접수 피드백 — 개장 후 체결 예정 안내(캘린더 기준, mock은 UI 편의상 근사).
@@ -181,7 +165,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     return json(422, { message: "장 마감 중에는 시장가 주문을 낼 수 없습니다." });
   }
 
-  // 9. orders insert(open, reservedKrw=null, fxRate 기록) → fillOrder(market)로 즉시 체결.
+  // 9. orders insert(open, reserved=null) → fillOrder(market)로 즉시 체결.
   try {
     await db.insert(orders).values({
       id: orderId,
@@ -192,8 +176,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       side,
       type: "market",
       qty: String(qty),
-      fxRate: String(fxRate),
-      reservedKrw: null,
+      reserved: null,
       status: "open",
       idempotencyKey,
     });
@@ -203,7 +186,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       const [dup] = await db
         .select({ id: orders.id, status: orders.status })
         .from(orders)
-        .where(and(eq(orders.userId, userId), eq(orders.idempotencyKey, idempotencyKey)))
+        .where(and(eq(orders.userId, userId), eq(orders.seasonId, seasonId), eq(orders.idempotencyKey, idempotencyKey)))
         .limit(1);
       if (dup) return replay(dup);
     }
@@ -220,7 +203,6 @@ export async function POST(req: NextRequest): Promise<Response> {
     orderType: "market",
     qty,
     filledPrice: tick.price,
-    fxRate,
   });
   const { httpStatus, message } = fillResultToHttp(result);
   return json(httpStatus, { ok: result.ok, orderId, message });

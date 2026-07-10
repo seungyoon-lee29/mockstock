@@ -1,10 +1,9 @@
 // 지정가 접수·취소 트랜잭션 (T08 §6.4·§6.3). 체결은 shared/fillOrder 단독 — 여기선 "예약·취소"만.
-//  · 접수(매수): 예상금액(limit×fx×qty)을 조건부 원자 차감 + reservedKrw 기록(접수 트랜잭션).
-//    US는 접수 시점 fxRate를 고정 기록(예약액=환불액 정합, §6.6). 40% 상한은 여기서 1차 검증
+//  · 접수(매수): 예상금액(limit×qty)을 조건부 원자 차감 + reserved 기록(접수 트랜잭션).
+//    리그별 네이티브 통화 — fxRate 불필요(리그 분리). 40% 상한은 여기서 1차 검증
 //    (체결 시 fillOrder가 FOR UPDATE로 재검증, §6.4).
 //  · 접수(매도): 예약 컬럼 없이 `보유 qty − 해당 종목 open 매도 qty 합 ≥ 주문 qty` 서브쿼리 검증.
-//    fxRate·reservedKrw는 null(매도는 체결 시점 환율, §6.6).
-//  · 취소: status='open' CAS + RETURNING reserved_krw → 매수면 환불(단일 트랜잭션, db.md).
+//  · 취소: status='open' CAS + RETURNING reserved → 매수면 환불(단일 트랜잭션, db.md).
 import { and, eq, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { accounts, orders, positions, seasons } from "@mockstock/shared/schema";
@@ -34,8 +33,6 @@ export interface PlaceLimitInput {
   side: Side;
   qty: number;
   limitPrice: number;
-  /** US 매수 지정가의 접수 시점 고정 환율(§6.6). KR=1. 매도는 무시(null 저장). */
-  fxRate: number;
   idempotencyKey: string;
 }
 
@@ -48,7 +45,7 @@ export type PlaceLimitResult =
  * 멱등키 충돌(UNIQUE(user_id, key))은 insert에서 throw → 호출부가 원본 결과 멱등 재생(§6.1).
  */
 export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<PlaceLimitResult> {
-  const { orderId, userId, seasonId, market, symbol, side, qty, limitPrice, fxRate } = i;
+  const { orderId, userId, seasonId, market, symbol, side, qty, limitPrice } = i;
 
   return db.transaction(async (tx): Promise<PlaceLimitResult> => {
     const posWhere = and(
@@ -88,25 +85,24 @@ export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<Place
         type: "limit",
         qty: String(qty),
         limitPrice: String(limitPrice),
-        fxRate: null, // 매도는 체결 시점 환율(§6.6) — 매칭 루프가 기록.
-        reservedKrw: null,
+        reserved: null,
         status: "open",
         idempotencyKey: i.idempotencyKey,
       });
       return { ok: true };
     }
 
-    // 매수: 예상금액 예약. limit×fx×qty를 센트로 한 번만 반올림(현금·예약·환불 동일 값).
-    const reservedCents = Math.round(limitPrice * fxRate * qty * 100);
+    // 매수: 예상금액 예약. limit×qty를 센트로 한 번만 반올림(현금·예약·환불 동일 값, 리그 네이티브 통화).
+    const reservedCents = Math.round(limitPrice * qty * 100);
     const reserved = fromCents(reservedCents);
 
     // 40% 상한 1차 검증(§6.4) — 기존 원가 + 대기 매수 예약 + 이번 예약 ≤ 시드×40%.
     const [season] = await tx.select({ seed: seasons.seedMoney }).from(seasons).where(eq(seasons.id, seasonId));
     const limitCents = Math.round(toCents(season.seed) * POSITION_LIMIT_PCT);
-    const [pos] = await tx.select({ cost: positions.costBasisKrw }).from(positions).where(posWhere);
+    const [pos] = await tx.select({ cost: positions.costBasis }).from(positions).where(posWhere);
     const posCostCents = pos ? toCents(pos.cost) : 0;
     const openBuys = await tx
-      .select({ reserved: orders.reservedKrw })
+      .select({ reserved: orders.reserved })
       .from(orders)
       .where(
         and(
@@ -123,18 +119,18 @@ export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<Place
       return { ok: false, reason: "over-limit" };
     }
 
-    // 조건부 원자 차감: cash_krw -= reserved WHERE cash_krw >= reserved. 0행이면 잔액 부족.
+    // 조건부 원자 차감: cash -= reserved WHERE cash >= reserved. 0행이면 잔액 부족.
     const deducted = await tx
       .update(accounts)
-      .set({ cashKrw: sql`${accounts.cashKrw} - ${reserved}::numeric` })
+      .set({ cash: sql`${accounts.cash} - ${reserved}::numeric` })
       .where(
         and(
           eq(accounts.userId, userId),
           eq(accounts.seasonId, seasonId),
-          sql`${accounts.cashKrw} >= ${reserved}::numeric`,
+          sql`${accounts.cash} >= ${reserved}::numeric`,
         ),
       )
-      .returning({ cashKrw: accounts.cashKrw });
+      .returning({ cash: accounts.cash });
     if (deducted.length === 0) return { ok: false, reason: "insufficient-cash" };
 
     await tx.insert(orders).values({
@@ -147,8 +143,7 @@ export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<Place
       type: "limit",
       qty: String(qty),
       limitPrice: String(limitPrice),
-      fxRate: String(fxRate), // 매수 지정가는 접수 시점 환율 고정(§6.6).
-      reservedKrw: reserved,
+      reserved: reserved, // 리그 네이티브 통화로 예약(fxRate 불필요, §4.4).
       status: "open",
       idempotencyKey: i.idempotencyKey,
     });
@@ -159,7 +154,7 @@ export async function placeLimitOrder(db: Db, i: PlaceLimitInput): Promise<Place
 export type CancelResult = { ok: true; refunded: boolean } | { ok: false };
 
 /**
- * 지정가 주문 취소 — 본인 open 주문만. CAS(id AND user_id AND status='open') RETURNING reserved_krw →
+ * 지정가 주문 취소 — 본인 open 주문만. CAS(id AND user_id AND status='open') RETURNING reserved →
  * 매수 예약이면 환불(단일 트랜잭션, §6.3). 취소·확정 expire 경합·재시도에도 이중 환불 불가.
  */
 export async function cancelOrder(db: Db, userId: string, orderId: string): Promise<CancelResult> {
@@ -168,15 +163,15 @@ export async function cancelOrder(db: Db, userId: string, orderId: string): Prom
       .update(orders)
       .set({ status: "cancelled" })
       .where(and(eq(orders.id, orderId), eq(orders.userId, userId), eq(orders.status, "open")))
-      .returning({ seasonId: orders.seasonId, reservedKrw: orders.reservedKrw });
+      .returning({ seasonId: orders.seasonId, reserved: orders.reserved });
     if (cancelled.length === 0) return { ok: false };
 
-    const { seasonId, reservedKrw } = cancelled[0];
-    if (reservedKrw == null) return { ok: true, refunded: false }; // 매도 지정가 등 예약 없음.
+    const { seasonId, reserved } = cancelled[0];
+    if (reserved == null) return { ok: true, refunded: false }; // 매도 지정가 등 예약 없음.
 
     await tx
       .update(accounts)
-      .set({ cashKrw: sql`${accounts.cashKrw} + ${reservedKrw}::numeric` })
+      .set({ cash: sql`${accounts.cash} + ${reserved}::numeric` })
       .where(and(eq(accounts.userId, userId), eq(accounts.seasonId, seasonId)));
     return { ok: true, refunded: true };
   });

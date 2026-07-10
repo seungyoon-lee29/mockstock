@@ -55,8 +55,7 @@ export interface SyncOrderPayload {
   side?: "buy" | "sell";
   qty?: string;
   limitPrice?: string | null;
-  fxRate?: string | null;
-  reservedKrw?: string | null;
+  reserved?: string | null;
 }
 
 /**
