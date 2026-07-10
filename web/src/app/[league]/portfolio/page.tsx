@@ -237,7 +237,7 @@ function PortfolioView({ league }: { league: string }) {
                           {formatPrice(price, posCurrency)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatPrice(valuation, currency)}
+                          {formatPrice(valuation, posCurrency)}
                         </TableCell>
                         <TableCell
                           className={cn("text-right tabular-nums", changeClass(pnl))}

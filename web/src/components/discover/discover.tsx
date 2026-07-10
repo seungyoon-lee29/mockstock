@@ -1,21 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { UNIVERSE, keyOf, type Market } from "@mockstock/shared";
 import { usePrices } from "@/lib/market/usePrices";
 import { QuoteCard } from "@/components/market/quote-card";
-import { cn } from "@/lib/utils";
 
-type Filter = "ALL" | "KR" | "US";
-const LABEL: Record<Filter, string> = { ALL: "전체", KR: "국내", US: "해외" };
-
-export function Discover() {
-  const [filter, setFilter] = useState<Filter>("ALL");
-
+// 리그 토글 제거 — 리그 안에서는 그 시장만(스펙 §디스커버). 리그 전환은 헤더 스위처.
+export function Discover({ market }: { market: Market }) {
   const entries = useMemo(
-    () =>
-      UNIVERSE.filter((e) => filter === "ALL" || e.market === (filter as Market)),
-    [filter],
+    () => UNIVERSE.filter((e) => e.market === market),
+    [market],
   );
 
   const quotes = usePrices(entries);
@@ -35,23 +29,6 @@ export function Discover() {
       <p className="mb-5 text-sm text-muted-foreground">
         실시간 인기 종목을 둘러보고 가상 현금으로 투자해보세요
       </p>
-
-      <div className="mb-4 inline-flex rounded-full bg-muted p-1 text-sm">
-        {(["ALL", "KR", "US"] as Filter[]).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={cn(
-              "rounded-full px-4 py-1.5 transition",
-              filter === f
-                ? "bg-background font-semibold shadow-sm"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {LABEL[f]}
-          </button>
-        ))}
-      </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {sorted.map((e) => (
