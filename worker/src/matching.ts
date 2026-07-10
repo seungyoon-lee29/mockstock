@@ -2,12 +2,11 @@
 // 시세북과 대조해 도달 시 fillOrder 체결. DB status='open'이 진실, 캐시는 힌트 — CAS가 최종 안전망(B10).
 //  · DATABASE_URL 없으면 스킵+경고(키 없는 mock 로컬 데모 npm run dev:worker 가 깨지지 않도록).
 //  · 부팅 로드·재동기화는 seasons.status='active' 조인 필수(확정 시즌 체결 이중 차단, §4.1).
-//  · 체결 환율: 매수 지정가=접수 시점 고정(order.fxRate), 매도=체결 시점(usdKrw). KR=1(§6.6).
 import { and, eq } from "drizzle-orm";
-import { FX_PAIR_USDKRW, type Market, type Side } from "@mockstock/shared";
+import { type Market, type Side } from "@mockstock/shared";
 import { isMarketOpen } from "@mockstock/shared/calendar";
 import { fillOrder } from "@mockstock/shared/fillOrder";
-import { fxRates, orders, seasons } from "@mockstock/shared/schema";
+import { orders, seasons } from "@mockstock/shared/schema";
 import { config } from "./config";
 import { getDb } from "./db";
 import { matchDecision } from "./matchRule";
@@ -24,9 +23,7 @@ interface OpenOrder {
   side: Side;
   qty: number;
   limitPrice: number;
-  /** 매수 지정가의 접수 시점 고정 환율(US). 매도·KR은 null(매도는 체결 시점 usdKrw 사용). */
-  fxRate: number | null;
-  reservedKrw: string | null;
+  reserved: string | null;
 }
 
 /** web push 페이로드(§7.1 payload.order). 숫자는 numeric 문자열로 오지만 방어적으로 coerce. */
@@ -39,8 +36,7 @@ export interface SyncOrderInput {
   side?: Side;
   qty?: number | string;
   limitPrice?: number | string | null;
-  fxRate?: number | string | null;
-  reservedKrw?: string | null;
+  reserved?: string | null;
 }
 
 const MATCH_INTERVAL_MS = 2_000; // 캐시↔시세북 대조 주기(무DB, 저비용).
@@ -48,7 +44,6 @@ const RESYNC_INTERVAL_MS = 60_000; // 장중 DB 재동기화 주기(§7.7).
 
 const cache = new Map<string, OpenOrder>();
 let matchDb: Db | null = null; // syncOrder 게이트(DB 없으면 매칭 비활성 → push 무시).
-let usdKrw = 0; // 매도 지정가 체결 환율(§6.6, 체결 시점). resync 때 갱신.
 
 /**
  * web 접수/취소 push 반영(§7.1). DB 없으면 no-op(mock 로컬).
@@ -72,12 +67,11 @@ export function syncOrder(op: "upsert" | "cancel", order: SyncOrderInput): void 
     side: order.side,
     qty: Number(order.qty),
     limitPrice: Number(order.limitPrice),
-    fxRate: order.fxRate != null ? Number(order.fxRate) : null,
-    reservedKrw: order.reservedKrw ?? null,
+    reserved: order.reserved ?? null,
   });
 }
 
-/** open 지정가 전량 재로드 + usdKrw 갱신(§4.1 active 조인, §6.6). */
+/** open 지정가 전량 재로드(§4.1 active 조인). */
 async function resync(db: Db): Promise<void> {
   // §7.7 Neon 보존: 실 피드 장외엔 DB 미접촉. mock 피드거나 개장 중일 때만 재동기화.
   const now = new Date();
@@ -98,8 +92,7 @@ async function resync(db: Db): Promise<void> {
       side: orders.side,
       qty: orders.qty,
       limitPrice: orders.limitPrice,
-      fxRate: orders.fxRate,
-      reservedKrw: orders.reservedKrw,
+      reserved: orders.reserved,
     })
     .from(orders)
     .innerJoin(seasons, eq(orders.seasonId, seasons.id))
@@ -117,13 +110,9 @@ async function resync(db: Db): Promise<void> {
       side: r.side,
       qty: Number(r.qty),
       limitPrice: Number(r.limitPrice),
-      fxRate: r.fxRate != null ? Number(r.fxRate) : null,
-      reservedKrw: r.reservedKrw,
+      reserved: r.reserved,
     });
   }
-
-  const [fx] = await db.select({ rate: fxRates.rate }).from(fxRates).where(eq(fxRates.pair, FX_PAIR_USDKRW));
-  usdKrw = fx ? Number(fx.rate) : 0;
 }
 
 /** 캐시 순회 — 도달 주문 체결. 결과 무관 종결 주문은 캐시에서 제거(DB가 진실). */
@@ -133,10 +122,6 @@ async function evaluate(db: Db, book: PriceBook): Promise<void> {
   for (const o of [...cache.values()]) {
     const decision = matchDecision(o.side, o.limitPrice, o.market, book.get(o.market, o.symbol), now);
     if (!decision.fill) continue;
-
-    // 체결 환율: KR=1, 매수=접수 고정, 매도=체결 시점 usdKrw. US 환율 없으면 체결 보류(§6.6).
-    const fxRate = o.market === "KR" ? 1 : o.side === "buy" ? (o.fxRate ?? 0) : usdKrw;
-    if (o.market === "US" && fxRate <= 0) continue;
 
     const result = await fillOrder(db, {
       orderId: o.id,
@@ -148,8 +133,7 @@ async function evaluate(db: Db, book: PriceBook): Promise<void> {
       orderType: "limit",
       qty: o.qty,
       filledPrice: decision.price,
-      fxRate,
-      reservedKrw: o.reservedKrw ?? undefined,
+      reserved: o.reserved ?? undefined,
     });
 
     cache.delete(o.id); // 체결·이미체결·거절 모두 종결 → 캐시에서 제거.
