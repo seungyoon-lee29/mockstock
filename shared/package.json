@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/*.test.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2"
