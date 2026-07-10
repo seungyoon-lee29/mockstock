@@ -11,7 +11,6 @@ import { and, desc, eq, gt, inArray, lte, ne, sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import {
   accounts,
-  fxRates,
   instruments,
   orders,
   portfolioSnapshots,
@@ -21,18 +20,20 @@ import {
   users,
 } from "./schema";
 import {
-  FX_PAIR_USDKRW,
   SEASON_END_HOUR_KST,
   SEASON_END_MINUTE_KST,
   SEASON_END_WEEKDAY,
   SEASON_START_WEEKDAY,
   SEED_MONEY_KRW,
 } from "./rules";
+// ponytail: fxRates 제거 후 US 평가액 환산을 0으로 대체 — A3(finalize 리그 분리)에서 네이티브 통화로 전환.
 
 type Db = PgDatabase<any, any, any>;
 
 export interface SeasonConfig {
-  /** 시즌 시드 현금(KRW). 미지정 시 SEED_MONEY_KRW(1,000만). */
+  /** 리그 시장. 미지정 시 "KR"(기존 동작 유지, A3에서 리그별 분리). */
+  market?: "US" | "KR";
+  /** 시즌 시드 현금(네이티브 통화). 미지정 시 SEED_MONEY_KRW(1,000만). */
   seedMoney?: number;
   /** 지정 시 고정 길이 롤링 시즌(단축 시즌 테스트, §4.1). 미지정 시 주간(월 00:00→금 15:30 KST). */
   durationMs?: number;
@@ -40,6 +41,7 @@ export interface SeasonConfig {
 
 export interface SeasonRow {
   id: string;
+  market: "US" | "KR";
   startsAt: Date;
   endsAt: Date;
   seedMoney: string;
@@ -135,19 +137,13 @@ async function loadPrices(db: Db): Promise<PriceMap> {
   return m;
 }
 
-/** 확정 시점 유효 USDKRW. 로우 없으면 0 — 09:00 크론이 확정에 선행 보장(§6.6), 없으면 US 평가 0. */
-async function loadUsdKrw(db: Db): Promise<number> {
-  const [row] = await db.select({ rate: fxRates.rate }).from(fxRates).where(eq(fxRates.pair, FX_PAIR_USDKRW));
-  return row ? Number(row.rate) : 0;
-}
-
-/** 보유 평가액(KRW 센트). US는 usdKrw 환산, KR은 1배. lastPrice 없는 종목은 평가 불가로 제외. */
-function holdingsCents(rows: PositionRow[], prices: PriceMap, usdKrw: number): number {
+/** 보유 평가액(네이티브 센트). lastPrice 없는 종목은 평가 불가로 제외. 리그별 네이티브 통화 — fxRate 불필요(A3에서 리그 분리). */
+function holdingsCents(rows: PositionRow[], prices: PriceMap): number {
   let sum = 0;
   for (const p of rows) {
     const price = prices.get(`${p.market}:${p.symbol}`);
     if (price == null) continue;
-    sum += Number(p.qty) * price * (p.market === "US" ? usdKrw : 1);
+    sum += Number(p.qty) * price;
   }
   return Math.round(sum * 100);
 }
@@ -171,6 +167,7 @@ export async function ensureActiveSeason(db: Db, cfg: SeasonConfig = {}): Promis
     .insert(seasons)
     .values({
       id: p.id,
+      market: cfg.market ?? "KR", // ponytail: 기본 KR — A3에서 리그별 분리로 교체.
       startsAt: p.startsAt,
       endsAt: p.endsAt,
       seedMoney: seedMoneyOf(cfg).toFixed(2),
@@ -203,10 +200,10 @@ export async function resetSeason(db: Db, cfg: SeasonConfig = {}): Promise<Seaso
     if (roster.length) {
       await db
         .insert(accounts)
-        .values(roster.map((r) => ({ userId: r.userId, seasonId: season.id, cashKrw: seedStr })))
+        .values(roster.map((r) => ({ userId: r.userId, seasonId: season.id, cash: seedStr })))
         .onConflictDoUpdate({
           target: [accounts.userId, accounts.seasonId],
-          set: { cashKrw: seedStr },
+          set: { cash: seedStr },
         });
     }
   }
@@ -240,26 +237,25 @@ async function finalizeOne(db: Db, seasonId: string, seedStr: string): Promise<b
       .returning({ id: seasons.id });
     if (flipped.length === 0) return false;
 
-    // ② open 주문 전량 expire + 예약 환불(매수 지정가 reservedKrw만). RETURNING 값으로만 환불(재조회 금지).
+    // ② open 주문 전량 expire + 예약 환불(매수 지정가 reserved만). RETURNING 값으로만 환불(재조회 금지).
     const expired = await tx
       .update(orders)
       .set({ status: "expired" })
       .where(and(eq(orders.seasonId, seasonId), eq(orders.status, "open")))
-      .returning({ userId: orders.userId, reservedKrw: orders.reservedKrw });
+      .returning({ userId: orders.userId, reserved: orders.reserved });
     for (const o of expired) {
-      if (o.reservedKrw != null) {
+      if (o.reserved != null) {
         await tx
           .update(accounts)
-          .set({ cashKrw: sql`${accounts.cashKrw} + ${o.reservedKrw}::numeric` })
+          .set({ cash: sql`${accounts.cash} + ${o.reserved}::numeric` })
           .where(and(eq(accounts.userId, o.userId), eq(accounts.seasonId, seasonId)));
       }
     }
 
-    // ③ finalValue = cash(환불 반영) + Σ(qty×lastPrice×fx).
+    // ③ finalValue = cash(환불 반영) + Σ(qty×lastPrice). 네이티브 통화 — fxRate 불필요(리그 분리 완료後).
     const prices = await loadPrices(tx);
-    const usdKrw = await loadUsdKrw(tx);
     const accs = await tx
-      .select({ userId: accounts.userId, cashKrw: accounts.cashKrw })
+      .select({ userId: accounts.userId, cash: accounts.cash })
       .from(accounts)
       .where(eq(accounts.seasonId, seasonId));
     const posRows = await tx
@@ -267,7 +263,7 @@ async function finalizeOne(db: Db, seasonId: string, seedStr: string): Promise<b
       .from(positions)
       .where(eq(positions.seasonId, seasonId));
     const snaps = await tx
-      .select({ userId: portfolioSnapshots.userId, totalValueKrw: portfolioSnapshots.totalValueKrw })
+      .select({ userId: portfolioSnapshots.userId, totalValue: portfolioSnapshots.totalValue })
       .from(portfolioSnapshots)
       .where(eq(portfolioSnapshots.seasonId, seasonId))
       .orderBy(portfolioSnapshots.date);
@@ -293,12 +289,12 @@ async function finalizeOne(db: Db, seasonId: string, seedStr: string): Promise<b
     const ranked = accs
       .filter((a) => !bots.has(a.userId))
       .map((a) => {
-        const finalCents = toCents(a.cashKrw) + holdingsCents(posByUser.get(a.userId) ?? [], prices, usdKrw);
+        const finalCents = toCents(a.cash) + holdingsCents(posByUser.get(a.userId) ?? [], prices);
         return {
           userId: a.userId,
           finalCents,
           returnPct: seedCents > 0 ? ((finalCents - seedCents) / seedCents) * 100 : 0,
-          mdd: maxDrawdownPct((snapByUser.get(a.userId) ?? []).map((s) => Number(s.totalValueKrw))),
+          mdd: maxDrawdownPct((snapByUser.get(a.userId) ?? []).map((s) => Number(s.totalValue))),
         };
       })
       .sort((x, y) => y.returnPct - x.returnPct || x.mdd - y.mdd);
@@ -324,7 +320,7 @@ async function finalizeOne(db: Db, seasonId: string, seedStr: string): Promise<b
 
 /**
  * 일별 스냅샷(MDD 원천, §4.1·§4.2). live 시즌 각 계좌:
- *   totalValueKrw = cash + Σ open매수 예약 현금 + Σ(qty×lastPrice×fx).  (예약 현금 포함, §4.1)
+ *   totalValue = cash + Σ open매수 예약 현금 + Σ(qty×lastPrice).  네이티브 통화(예약 현금 포함, §4.1)
  * 같은 날 재실행은 upsert 덮어쓰기(멱등). 스냅샷 행 수 반환.
  */
 export async function snapshotPortfolios(db: Db): Promise<number> {
@@ -336,12 +332,11 @@ export async function snapshotPortfolios(db: Db): Promise<number> {
   if (live.length === 0) return 0;
 
   const prices = await loadPrices(db);
-  const usdKrw = await loadUsdKrw(db);
   const date = kstDateString(now);
   let count = 0;
   for (const s of live) {
     const accs = await db
-      .select({ userId: accounts.userId, cashKrw: accounts.cashKrw })
+      .select({ userId: accounts.userId, cash: accounts.cash })
       .from(accounts)
       .where(eq(accounts.seasonId, s.id));
     const posRows = await db
@@ -349,30 +344,30 @@ export async function snapshotPortfolios(db: Db): Promise<number> {
       .from(positions)
       .where(eq(positions.seasonId, s.id));
     const openBuys = await db
-      .select({ userId: orders.userId, reservedKrw: orders.reservedKrw })
+      .select({ userId: orders.userId, reserved: orders.reserved })
       .from(orders)
       .where(and(eq(orders.seasonId, s.id), eq(orders.status, "open"), eq(orders.side, "buy")));
 
     const posByUser = groupBy(posRows, (p) => p.userId);
     const reservedByUser = new Map<string, number>();
     for (const o of openBuys) {
-      if (o.reservedKrw != null) {
-        reservedByUser.set(o.userId, (reservedByUser.get(o.userId) ?? 0) + toCents(o.reservedKrw));
+      if (o.reserved != null) {
+        reservedByUser.set(o.userId, (reservedByUser.get(o.userId) ?? 0) + toCents(o.reserved));
       }
     }
 
     for (const a of accs) {
       const totalCents =
-        toCents(a.cashKrw) +
+        toCents(a.cash) +
         (reservedByUser.get(a.userId) ?? 0) +
-        holdingsCents(posByUser.get(a.userId) ?? [], prices, usdKrw);
+        holdingsCents(posByUser.get(a.userId) ?? [], prices);
       const total = fromCents(totalCents);
       await db
         .insert(portfolioSnapshots)
-        .values({ userId: a.userId, seasonId: s.id, date, totalValueKrw: total })
+        .values({ userId: a.userId, seasonId: s.id, date, totalValue: total })
         .onConflictDoUpdate({
           target: [portfolioSnapshots.userId, portfolioSnapshots.seasonId, portfolioSnapshots.date],
-          set: { totalValueKrw: total },
+          set: { totalValue: total },
         });
       count++;
     }

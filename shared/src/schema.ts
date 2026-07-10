@@ -50,31 +50,32 @@ export const users = pgTable("users", {
     .$onUpdate(() => new Date()),
 });
 
-/** 주간 시즌. 경계는 env 파라미터화(A15) — 단축 시즌으로 풀사이클 테스트. */
+/** 주간 시즌. 리그 ≡ 시장 1:1 — id = <isoStart>:US / :KR, seedMoney·seed는 리그별 네이티브. */
 export const seasons = pgTable("seasons", {
   id: text("id").primaryKey(),
+  market: marketEnum("market").notNull(),
   startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
   endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
   seedMoney: numeric("seed_money", { precision: 18, scale: 2 }).notNull(),
   status: seasonStatusEnum("status").notNull().default("active"),
 });
 
-/** 시즌별 현금 계좌. cashKrw는 예약분(A5) 차감 후 순액. 중간 합류 시 lazy upsert(A3). */
+/** 시즌별 현금 계좌. cash는 예약분 차감 후 순액. 리그별 네이티브 통화(통화는 시즌 market이 함의; toCents/fromCents 사용). */
 export const accounts = pgTable(
   "accounts",
   {
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     seasonId: text("season_id").notNull().references(() => seasons.id),
-    cashKrw: numeric("cash_krw", { precision: 18, scale: 2 }).notNull(),
+    cash: numeric("cash", { precision: 18, scale: 2 }).notNull(),
     joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.userId, t.seasonId] }),
-    check("cash_krw_non_negative", sql`${t.cashKrw} >= 0`),
+    check("cash_non_negative", sql`${t.cash} >= 0`),
   ],
 );
 
-/** 시즌별 보유. costBasisKrw는 총 취득원가(KRW), realizedPnl은 환차손익 포함(B12). */
+/** 시즌별 보유. costBasis는 총 취득원가(네이티브 통화), realizedPnl은 네이티브 손익(B12). */
 export const positions = pgTable(
   "positions",
   {
@@ -83,9 +84,8 @@ export const positions = pgTable(
     market: marketEnum("market").notNull(),
     symbol: text("symbol").notNull(),
     qty: numeric("qty", { precision: 20, scale: 6 }).notNull(),
-    // 주당 평단가가 아니라 총 취득원가(KRW). 평단가는 costBasisKrw/qty 파생 표시.
-    // 매도 시 수량 비례 원가만 차감 → 라운딩 누적 없이 Σ realizedPnl ≡ 현금 증감 성립(B12).
-    costBasisKrw: numeric("cost_basis_krw", { precision: 18, scale: 2 }).notNull(),
+    // 리그별 네이티브 총 취득원가; toCents/fromCents 사용. 매도 시 수량 비례 원가만 차감 → Σ realizedPnl ≡ cash.
+    costBasis: numeric("cost_basis", { precision: 18, scale: 2 }).notNull(),
     realizedPnl: numeric("realized_pnl", { precision: 18, scale: 2 })
       .notNull()
       .default("0"),
@@ -110,18 +110,16 @@ export const orders = pgTable(
     qty: numeric("qty", { precision: 20, scale: 6 }).notNull(),
     limitPrice: numeric("limit_price", { precision: 18, scale: 2 }),
     filledPrice: numeric("filled_price", { precision: 18, scale: 2 }),
-    fxRate: numeric("fx_rate", { precision: 12, scale: 4 }), // 접수/체결 시점 환율 고정(A5)
-    // 매수 지정가 접수 시 cashKrw에서 차감·예약한 원본 금액. 취소/만료/체결 차액 환불의
-    // 단일 진실 원본 — 환불은 항상 이 값 기준(재계산 금지, 라운딩/환율 재조회로 인한 누수 방지).
-    reservedKrw: numeric("reserved_krw", { precision: 18, scale: 2 }),
+    // 매수 지정가 접수 시 cash에서 차감·예약한 네이티브 원본 금액. 취소/만료/체결 차액 환불의 단일 진실 원본.
+    reserved: numeric("reserved", { precision: 18, scale: 2 }),
     status: orderStatusEnum("status").notNull().default("open"),
     idempotencyKey: text("idempotency_key").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     filledAt: timestamp("filled_at", { withTimezone: true }),
   },
   (t) => [
-    // 접수 중복 차단은 유저 스코프 — 전역 유니크 금지(다른 유저의 우연한 키 충돌 방지).
-    uniqueIndex("orders_user_idempotency_uq").on(t.userId, t.idempotencyKey),
+    // 접수 중복 차단은 (유저, 시즌) 스코프 — 리그 간 같은 키 충돌 차단(season_id가 market 인코딩, BLOCKER).
+    uniqueIndex("orders_user_season_idempotency_uq").on(t.userId, t.seasonId, t.idempotencyKey),
   ],
 );
 
@@ -166,14 +164,15 @@ export const watchlistItems = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.market, t.symbol] })],
 );
 
-/** 수익률 그래프·MDD 타이브레이커(A1) 원천. totalValueKrw는 예약 현금 포함(B11). */
+/** 수익률 그래프·MDD 타이브레이커(A1) 원천. totalValue는 예약 현금 포함(B11). */
 export const portfolioSnapshots = pgTable(
   "portfolio_snapshots",
   {
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     seasonId: text("season_id").notNull().references(() => seasons.id),
     date: date("date").notNull(),
-    totalValueKrw: numeric("total_value_krw", { precision: 18, scale: 2 }).notNull(),
+    // 리그별 네이티브 총자산(예약 현금 포함). 리그는 seasonId가 인코딩 → MDD·수익률 리그별 산출.
+    totalValue: numeric("total_value", { precision: 18, scale: 2 }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.seasonId, t.date] })],
 );
@@ -208,13 +207,6 @@ export const minuteCandles = pgTable(
   },
   (t) => [primaryKey({ columns: [t.market, t.symbol, t.ts] })],
 );
-
-/** 환율 단일 로우 per 통화쌍. 일 1회 갱신, 빈 응답 시 직전 값 유지(B8). */
-export const fxRates = pgTable("fx_rates", {
-  pair: text("pair").primaryKey(), // "USDKRW"
-  rate: numeric("rate", { precision: 12, scale: 4 }).notNull(),
-  fetchedAt: timestamp("fetched_at", { withTimezone: true }).notNull(),
-});
 
 // ── Better Auth adapter 테이블 (T03) ──────────────────────────────────────────
 // user 모델은 위 `users` 테이블 재사용(auth.ts schema 매핑). session/account/verification은

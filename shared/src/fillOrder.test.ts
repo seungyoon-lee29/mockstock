@@ -37,11 +37,12 @@ async function newDb(cash = SEED): Promise<DB> {
   await db.insert(users).values({ id: "u1", name: "테스터" });
   await db.insert(seasons).values({
     id: "s1",
+    market: "KR",
     startsAt: new Date("2026-07-01T00:00:00Z"),
     endsAt: new Date("2026-07-31T00:00:00Z"),
     seedMoney: String(SEED),
   });
-  await db.insert(accounts).values({ userId: "u1", seasonId: "s1", cashKrw: cash.toFixed(2) });
+  await db.insert(accounts).values({ userId: "u1", seasonId: "s1", cash: cash.toFixed(2) });
   return db;
 }
 
@@ -55,8 +56,7 @@ async function placeOrder(
     type?: "market" | "limit";
     qty: number;
     limitPrice?: number;
-    fxRate?: number;
-    reservedKrw?: string;
+    reserved?: string;
   },
 ): Promise<string> {
   const id = `o${++seq}`;
@@ -70,8 +70,7 @@ async function placeOrder(
     type: o.type ?? "market",
     qty: String(o.qty),
     limitPrice: o.limitPrice != null ? String(o.limitPrice) : null,
-    fxRate: o.fxRate != null ? String(o.fxRate) : null,
-    reservedKrw: o.reservedKrw ?? null,
+    reserved: o.reserved ?? null,
     idempotencyKey: id,
   });
   return id;
@@ -83,7 +82,7 @@ function fill(db: DB, orderId: string, i: Omit<FillInput, "orderId" | "userId" |
 
 async function cashCents(db: DB): Promise<number> {
   const [a] = await db.select().from(accounts).where(eq(accounts.userId, "u1"));
-  return cents(a.cashKrw);
+  return cents(a.cash);
 }
 async function pos(db: DB, market: "US" | "KR", symbol: string) {
   const [p] = await db
@@ -101,11 +100,11 @@ async function orderStatus(db: DB, id: string): Promise<string> {
 test("① 시장가 매수: 현금 차감·원가 적립", async () => {
   const db = await newDb();
   const id = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 3 });
-  const r = await fill(db, id, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 3, filledPrice: 75000, fxRate: 1 });
+  const r = await fill(db, id, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 3, filledPrice: 75000 });
   assert.deepEqual(r, { ok: true, alreadyFilled: false });
   assert.equal(await cashCents(db), (SEED - 225000) * 100);
   const p = (await pos(db, "KR", "005930"))!;
-  assert.equal(cents(p.costBasisKrw), 225000 * 100);
+  assert.equal(cents(p.costBasis), 225000 * 100);
   assert.equal(Number(p.qty), 3);
 });
 
@@ -113,7 +112,7 @@ test("① 시장가 매수: 현금 차감·원가 적립", async () => {
 test("② 잔액 부족: insufficient-cash rejected", async () => {
   const db = await newDb(100_000);
   const id = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 2 });
-  const r = await fill(db, id, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 2, filledPrice: 75000, fxRate: 1 });
+  const r = await fill(db, id, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 2, filledPrice: 75000 });
   assert.deepEqual(r, { ok: false, reason: "insufficient-cash" });
   assert.equal(await cashCents(db), 100_000 * 100); // 현금 불변
   assert.equal(await pos(db, "KR", "005930"), null);
@@ -124,7 +123,7 @@ test("② 잔액 부족: insufficient-cash rejected", async () => {
 test("③ 이중 체결 차단: 두 번째 fillOrder는 already-filled no-op", async () => {
   const db = await newDb();
   const id = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 2 });
-  const args = { market: "KR" as const, symbol: "005930", side: "buy" as const, orderType: "market" as const, qty: 2, filledPrice: 75000, fxRate: 1 };
+  const args = { market: "KR" as const, symbol: "005930", side: "buy" as const, orderType: "market" as const, qty: 2, filledPrice: 75000 };
   const r1 = await fill(db, id, args);
   const afterFirst = await cashCents(db);
   const r2 = await fill(db, id, args);
@@ -134,35 +133,35 @@ test("③ 이중 체결 차단: 두 번째 fillOrder는 already-filled no-op", a
   assert.equal(Number((await pos(db, "KR", "005930"))!.qty), 2);
 });
 
-// ④ 부분 매도 — 수량 비례 원가 차감 + realizedPnl(US 환율 포함).
-test("④ 부분 매도: 비례 원가 차감·환차손익 포함 realizedPnl", async () => {
+// ④ 부분 매도 — 수량 비례 원가 차감 + realizedPnl(네이티브 통화, fxRate 제거).
+test("④ 부분 매도: 비례 원가 차감·realizedPnl", async () => {
   const db = await newDb();
   const buy = await placeOrder(db, { market: "US", symbol: "AAPL", side: "buy", qty: 4 });
-  await fill(db, buy, { market: "US", symbol: "AAPL", side: "buy", orderType: "market", qty: 4, filledPrice: 230, fxRate: 1350 });
-  // 매수원가 = 230×1350×4 = 1,242,000
+  await fill(db, buy, { market: "US", symbol: "AAPL", side: "buy", orderType: "market", qty: 4, filledPrice: 230 });
+  // 매수원가 = 230×4 = 920
   const sell = await placeOrder(db, { market: "US", symbol: "AAPL", side: "sell", qty: 2 });
-  const r = await fill(db, sell, { market: "US", symbol: "AAPL", side: "sell", orderType: "market", qty: 2, filledPrice: 250, fxRate: 1400 });
+  const r = await fill(db, sell, { market: "US", symbol: "AAPL", side: "sell", orderType: "market", qty: 2, filledPrice: 250 });
   assert.deepEqual(r, { ok: true, alreadyFilled: false });
-  // 매도대금 = 250×1400×2 = 700,000 / 차감원가 = 1,242,000×2/4 = 621,000 / realized = 79,000
+  // 매도대금 = 250×2 = 500 / 차감원가 = 920×2/4 = 460 / realized = 40
   const p = (await pos(db, "US", "AAPL"))!;
   assert.equal(Number(p.qty), 2);
-  assert.equal(cents(p.costBasisKrw), 621_000 * 100);
-  assert.equal(cents(p.realizedPnl), 79_000 * 100);
-  assert.equal(await cashCents(db), (SEED - 1_242_000 + 700_000) * 100);
+  assert.equal(cents(p.costBasis), 460 * 100);
+  assert.equal(cents(p.realizedPnl), 40 * 100);
+  assert.equal(await cashCents(db), (SEED - 920 + 500) * 100);
 });
 
 // ⑤ 지정가 매수 — 예약 소진 + 유리한 체결가 차액 환급.
 test("⑤ 지정가 매수: 예약 소진 + 차액 환급", async () => {
   const db = await newDb();
-  // 접수: 지정가 240 × 1350 × 2 = 648,000 예약(현금 선차감).
-  const reserved = (240 * 1350 * 2).toFixed(2);
-  await db.update(accounts).set({ cashKrw: (SEED - 648_000).toFixed(2) }).where(eq(accounts.userId, "u1"));
-  const id = await placeOrder(db, { market: "US", symbol: "AAPL", side: "buy", type: "limit", qty: 2, limitPrice: 240, fxRate: 1350, reservedKrw: reserved });
-  // 체결: 더 유리한 230에 도달 → 실체결 230×1350×2 = 621,000, 차액 27,000 환급.
-  const r = await fill(db, id, { market: "US", symbol: "AAPL", side: "buy", orderType: "limit", qty: 2, filledPrice: 230, fxRate: 1350, reservedKrw: reserved });
+  // 접수: 지정가 240×2 = 480 예약(현금 선차감).
+  const reservedAmt = (240 * 2).toFixed(2);
+  await db.update(accounts).set({ cash: (SEED - 480).toFixed(2) }).where(eq(accounts.userId, "u1"));
+  const id = await placeOrder(db, { market: "US", symbol: "AAPL", side: "buy", type: "limit", qty: 2, limitPrice: 240, reserved: reservedAmt });
+  // 체결: 더 유리한 230에 도달 → 실체결 230×2 = 460, 차액 20 환급.
+  const r = await fill(db, id, { market: "US", symbol: "AAPL", side: "buy", orderType: "limit", qty: 2, filledPrice: 230, reserved: reservedAmt });
   assert.deepEqual(r, { ok: true, alreadyFilled: false });
-  assert.equal(await cashCents(db), (SEED - 621_000) * 100); // 순차감 = 실체결액
-  assert.equal(cents((await pos(db, "US", "AAPL"))!.costBasisKrw), 621_000 * 100);
+  assert.equal(await cashCents(db), (SEED - 460) * 100); // 순차감 = 실체결액
+  assert.equal(cents((await pos(db, "US", "AAPL"))!.costBasis), 460 * 100);
   assert.equal(await orderStatus(db, id), "filled");
 });
 
@@ -171,11 +170,11 @@ test("⑤ 지정가 매수: 예약 소진 + 차액 환급", async () => {
 test("⑥ 40% 상한: 초과 두 번째 매수 over-limit rejected", async () => {
   const db = await newDb();
   const b1 = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 30 });
-  await fill(db, b1, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 30, filledPrice: 100_000, fxRate: 1 }); // 300만
+  await fill(db, b1, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 30, filledPrice: 100_000 }); // 300만
   const b2 = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 20 });
-  const r = await fill(db, b2, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 20, filledPrice: 100_000, fxRate: 1 }); // +200만 → 500만 > 400만
+  const r = await fill(db, b2, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 20, filledPrice: 100_000 }); // +200만 → 500만 > 400만
   assert.deepEqual(r, { ok: false, reason: "over-limit" });
-  assert.equal(cents((await pos(db, "KR", "005930"))!.costBasisKrw), 3_000_000 * 100); // 불변
+  assert.equal(cents((await pos(db, "KR", "005930"))!.costBasis), 3_000_000 * 100); // 불변
   assert.equal(await cashCents(db), (SEED - 3_000_000) * 100);
   assert.equal(await orderStatus(db, b2), "rejected");
 });
@@ -184,34 +183,34 @@ test("⑥ 40% 상한: 초과 두 번째 매수 over-limit rejected", async () =>
 test("⑦ 보유 초과 매도: insufficient-qty rejected", async () => {
   const db = await newDb();
   const buy = await placeOrder(db, { market: "KR", symbol: "005930", side: "buy", qty: 2 });
-  await fill(db, buy, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 2, filledPrice: 75000, fxRate: 1 });
+  await fill(db, buy, { market: "KR", symbol: "005930", side: "buy", orderType: "market", qty: 2, filledPrice: 75000 });
   const cashAfterBuy = await cashCents(db);
   const sell = await placeOrder(db, { market: "KR", symbol: "005930", side: "sell", qty: 5 });
-  const r = await fill(db, sell, { market: "KR", symbol: "005930", side: "sell", orderType: "market", qty: 5, filledPrice: 80000, fxRate: 1 });
+  const r = await fill(db, sell, { market: "KR", symbol: "005930", side: "sell", orderType: "market", qty: 5, filledPrice: 80000 });
   assert.deepEqual(r, { ok: false, reason: "insufficient-qty" });
   assert.equal(await cashCents(db), cashAfterBuy); // 현금 불변
   assert.equal(Number((await pos(db, "KR", "005930"))!.qty), 2); // 보유 불변
   assert.equal(await orderStatus(db, sell), "rejected");
 });
 
-// ⑧ 불변식 — 무작위 매수/매도(KR+US 혼합) 후 매 스텝:
-//    cash + Σ costBasisKrw ≡ seed + Σ realizedPnl (엄밀 등호, 정수 센트).
+// ⑧ 불변식 — 무작위 매수/매도 후 매 스텝:
+//    cash + Σ costBasis ≡ seed + Σ realizedPnl (엄밀 등호, 정수 센트).
 test("⑧ 정산 불변식: cash + Σ원가 ≡ seed + Σ realizedPnl", async () => {
   const db = await newDb();
   const seedCents = SEED * 100;
   // 결정적 LCG(재현 가능). 시장가만 사용 → 예약 현금이 0이라 불변식이 순수형으로 성립.
   let state = 12345;
   const rnd = () => (state = (state * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-  const syms: Array<{ m: "US" | "KR"; s: string; base: number; usd: boolean }> = [
-    { m: "KR", s: "005930", base: 75_000, usd: false },
-    { m: "KR", s: "000660", base: 210_000, usd: false },
-    { m: "US", s: "AAPL", base: 230, usd: true },
-    { m: "US", s: "MSFT", base: 480, usd: true },
+  const syms: Array<{ m: "US" | "KR"; s: string; base: number }> = [
+    { m: "KR", s: "005930", base: 75_000 },
+    { m: "KR", s: "000660", base: 210_000 },
+    { m: "US", s: "AAPL", base: 230 },
+    { m: "US", s: "MSFT", base: 480 },
   ];
 
   async function invariant() {
     const ps = await db.select().from(positions).where(eq(positions.seasonId, "s1"));
-    const costSum = ps.reduce((a, p) => a + cents(p.costBasisKrw), 0);
+    const costSum = ps.reduce((a, p) => a + cents(p.costBasis), 0);
     const realizedSum = ps.reduce((a, p) => a + cents(p.realizedPnl), 0);
     assert.equal(await cashCents(db) + costSum, seedCents + realizedSum);
   }
@@ -219,8 +218,7 @@ test("⑧ 정산 불변식: cash + Σ원가 ≡ seed + Σ realizedPnl", async ()
   for (let i = 0; i < 80; i++) {
     const sym = syms[Math.floor(rnd() * syms.length)];
     const buy = rnd() < 0.55;
-    const qty = 1 + Math.floor(rnd() * (sym.usd ? 6 : 15));
-    const fx = sym.usd ? 1300 + Math.floor(rnd() * 100) : 1; // US는 스텝마다 환율 변동
+    const qty = 1 + Math.floor(rnd() * (sym.m === "US" ? 6 : 15));
     const price = Math.round(sym.base * (0.9 + rnd() * 0.2));
     const id = await placeOrder(db, { market: sym.m, symbol: sym.s, side: buy ? "buy" : "sell", qty });
     await fill(db, id, {
@@ -230,7 +228,6 @@ test("⑧ 정산 불변식: cash + Σ원가 ≡ seed + Σ realizedPnl", async ()
       orderType: "market",
       qty,
       filledPrice: price,
-      fxRate: fx,
     }); // 거절되면 상태 불변 → 불변식은 그대로 성립
     await invariant();
   }
