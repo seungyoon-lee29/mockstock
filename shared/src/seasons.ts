@@ -24,18 +24,16 @@ import {
   SEASON_END_MINUTE_KST,
   SEASON_END_WEEKDAY,
   SEASON_START_WEEKDAY,
-  SEED_MONEY_KRW,
+  SEED_MONEY,
 } from "./rules";
-// ponytail: fxRates 제거 후 US 평가액 환산을 0으로 대체 — A3(finalize 리그 분리)에서 네이티브 통화로 전환.
+import type { Market } from "./types";
 
 type Db = PgDatabase<any, any, any>;
 
 export interface SeasonConfig {
-  /** 리그 시장. 미지정 시 "KR"(기존 동작 유지, A3에서 리그별 분리). */
-  market?: "US" | "KR";
-  /** 시즌 시드 현금(네이티브 통화). 미지정 시 SEED_MONEY_KRW(1,000만). */
+  /** 시즌 시드 현금(네이티브 통화). 미지정 시 SEED_MONEY[market](리그별 네이티브). */
   seedMoney?: number;
-  /** 지정 시 고정 길이 롤링 시즌(단축 시즌 테스트, §4.1). 미지정 시 주간(월 00:00→금 15:30 KST). */
+  /** 지정 시 고정 길이 롤링 시즌(단축 시즌 테스트, §4.1). 미지정 시 주간(KR=월00:00→금15:30 KST, US=월→금16:00 ET). */
   durationMs?: number;
 }
 
@@ -51,8 +49,8 @@ export interface SeasonRow {
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function seedMoneyOf(cfg: SeasonConfig): number {
-  return cfg.seedMoney ?? SEED_MONEY_KRW;
+function seedMoneyOf(cfg: SeasonConfig, market: Market): number {
+  return cfg.seedMoney ?? SEED_MONEY[market];
 }
 
 /** now(UTC)를 KST로 시프트해 'YYYY-MM-DD'(KST 날짜)를 얻는다. 스냅샷 date 키에 사용. */
@@ -60,31 +58,72 @@ function kstDateString(now: Date): string {
   return new Date(now.getTime() + KST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-/** 주간 시즌 경계 — 이번 주 월요일 00:00 KST 시작, 금요일 15:30 KST 확정(§4.1). DST 없는 KST라 +9h 고정. */
-function weeklyPeriod(now: Date): { startsAt: Date; endsAt: Date } {
+/**
+ * 주간 시즌 경계. KR = 이번 주 월요일 00:00 KST → 금요일 15:30 KST(DST 없는 +9h 고정).
+ * US = 이번 주 월요일 → 금요일 16:00 America/New_York(DST 자동).
+ * export: 테스트·외부 경계 검증용.
+ */
+export function weeklyPeriod(market: Market, now: Date): { startsAt: Date; endsAt: Date } {
   const kst = new Date(now.getTime() + KST_OFFSET_MS); // KST 필드를 getUTC*로 읽기 위한 시프트
   const daysSinceStart = (kst.getUTCDay() - SEASON_START_WEEKDAY + 7) % 7;
   const startMondayUtc =
     Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth(), kst.getUTCDate() - daysSinceStart) -
     KST_OFFSET_MS;
-  const endOffsetMs =
-    (SEASON_END_WEEKDAY - SEASON_START_WEEKDAY) * DAY_MS +
-    (SEASON_END_HOUR_KST * 60 + SEASON_END_MINUTE_KST) * 60 * 1000;
-  return { startsAt: new Date(startMondayUtc), endsAt: new Date(startMondayUtc + endOffsetMs) };
+
+  if (market === "KR") {
+    const endOffsetMs =
+      (SEASON_END_WEEKDAY - SEASON_START_WEEKDAY) * DAY_MS +
+      (SEASON_END_HOUR_KST * 60 + SEASON_END_MINUTE_KST) * 60 * 1000;
+    return { startsAt: new Date(startMondayUtc), endsAt: new Date(startMondayUtc + endOffsetMs) };
+  }
+
+  // US: 그 주 금요일 16:00 America/New_York을 DST-aware로 산출.
+  // startMondayUtc = 월요일 00:00 KST(= 일요일 15:00 UTC). 금요일 16:00 UTC는 항상 NY에서 금요일임.
+  // (금 16:00 UTC = 금 12:00 EDT = 금 11:00 EST — 양쪽 모두 금요일 보장)
+  const friAnchor = new Date(startMondayUtc + 4 * DAY_MS + KST_OFFSET_MS + 16 * 60 * 60 * 1000);
+  const endsAt = fridayCloseET(friAnchor);
+  return { startsAt: new Date(startMondayUtc), endsAt };
 }
 
-/** 현재 시각이 속한 시즌의 결정적 경계 + id. 같은 기간엔 항상 같은 id → onConflict 로 멱등 생성. */
-function currentPeriod(now: Date, cfg: SeasonConfig): { id: string; startsAt: Date; endsAt: Date } {
+/**
+ * 금요일 정오 UTC 앵커로부터 그날의 미국 동부 16:00(DST 자동)을 UTC Date로 반환.
+ * Intl.DateTimeFormat("en-US", { timeZoneName: "shortOffset" }) 로 "GMT-4"/"GMT-5" 파싱.
+ * KST 절대시각 하드코딩 없음 — US 경계는 반드시 tz 계산 경유(rules/worker.md).
+ */
+function fridayCloseET(friNoonUtc: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZoneName: "shortOffset",
+  }).formatToParts(friNoonUtc);
+  const p: Record<string, string> = {};
+  for (const { type, value } of parts) p[type] = value;
+  // "GMT-4" → -240분, "GMT-5" → -300분
+  const tzStr = p.timeZoneName ?? "GMT-5"; // 파싱 실패 시 EST fallback
+  const sign = tzStr.includes("-") ? -1 : 1;
+  const [h, m = "0"] = tzStr.replace("GMT", "").replace("-", "").replace("+", "").split(":");
+  const offsetMinutes = sign * (Number(h) * 60 + Number(m));
+  // 그날 뉴욕 현지 날짜의 16:00 UTC = Date.UTC(y, mo, d, 16, 0) - offsetMinutes * 60_000
+  return new Date(
+    Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), 16, 0) -
+      offsetMinutes * 60_000,
+  );
+}
+
+/** 현재 시각이 속한 시즌의 결정적 경계 + id. 같은 기간+market엔 항상 같은 id → onConflict 로 멱등 생성. */
+function currentPeriod(now: Date, cfg: SeasonConfig, market: Market): { id: string; startsAt: Date; endsAt: Date } {
   if (cfg.durationMs && cfg.durationMs > 0) {
     const startMs = Math.floor(now.getTime() / cfg.durationMs) * cfg.durationMs;
     return {
-      id: `season_${new Date(startMs).toISOString()}`,
+      id: `season_${new Date(startMs).toISOString()}:${market}`,
       startsAt: new Date(startMs),
       endsAt: new Date(startMs + cfg.durationMs),
     };
   }
-  const { startsAt, endsAt } = weeklyPeriod(now);
-  return { id: `season_${startsAt.toISOString()}`, startsAt, endsAt };
+  const { startsAt, endsAt } = weeklyPeriod(market, now);
+  return { id: `season_${startsAt.toISOString()}:${market}`, startsAt, endsAt };
 }
 
 // numeric(_,2) 문자열 ↔ 센트 정수 (fillOrder 와 동일 규약 — 현금·예약을 정확히 합산).
@@ -152,25 +191,25 @@ function holdingsCents(rows: PositionRow[], prices: PriceMap): number {
  * active 시즌이 없으면 현재 기간 시즌을 생성한다(멱등·동시 호출 안전).
  * 아직 만료 전(endsAt>now)인 active 시즌이 있으면 그대로 반환 — 재차감/재설정 없음.
  */
-export async function ensureActiveSeason(db: Db, cfg: SeasonConfig = {}): Promise<SeasonRow> {
+export async function ensureActiveSeason(db: Db, cfg: SeasonConfig, market: Market): Promise<SeasonRow> {
   const now = new Date();
   const [live] = await db
     .select()
     .from(seasons)
-    .where(and(eq(seasons.status, "active"), gt(seasons.endsAt, now)))
+    .where(and(eq(seasons.status, "active"), eq(seasons.market, market), gt(seasons.endsAt, now)))
     .orderBy(desc(seasons.startsAt))
     .limit(1);
   if (live) return live as SeasonRow;
 
-  const p = currentPeriod(now, cfg);
+  const p = currentPeriod(now, cfg, market);
   await db
     .insert(seasons)
     .values({
       id: p.id,
-      market: cfg.market ?? "KR", // ponytail: 기본 KR — A3에서 리그별 분리로 교체.
+      market,
       startsAt: p.startsAt,
       endsAt: p.endsAt,
-      seedMoney: seedMoneyOf(cfg).toFixed(2),
+      seedMoney: seedMoneyOf(cfg, market).toFixed(2),
       status: "active",
     })
     .onConflictDoNothing({ target: seasons.id }); // 동시 생성 시 두 번째는 no-op
@@ -181,15 +220,17 @@ export async function ensureActiveSeason(db: Db, cfg: SeasonConfig = {}): Promis
 /**
  * 월요일 리셋 — 신규 시즌 row(멱등) + 직전 시즌 로스터를 신규 시즌으로 이관·시드 재설정.
  * 신규 시즌은 per-season이라 포지션 없는 클린 슬레이트 → 재설정은 계좌 현금만 seed 로.
+ * 직전 시즌은 같은 market으로 한정 — 교차 리그 로스터 오염 차단.
  * ponytail: 재설정은 매주 크론(장 개장 전) 전제. 멱등 재실행 안전, 개장 후 매매 중 호출은 상정하지 않음.
  */
-export async function resetSeason(db: Db, cfg: SeasonConfig = {}): Promise<SeasonRow> {
-  const season = await ensureActiveSeason(db, cfg);
-  const seedStr = seedMoneyOf(cfg).toFixed(2);
+export async function resetSeason(db: Db, cfg: SeasonConfig, market: Market): Promise<SeasonRow> {
+  const season = await ensureActiveSeason(db, cfg, market);
+  const seedStr = seedMoneyOf(cfg, market).toFixed(2);
+  // 직전 시즌은 같은 리그(market)만 — 교차 리그 로스터 오염 차단.
   const [prior] = await db
     .select({ id: seasons.id })
     .from(seasons)
-    .where(ne(seasons.id, season.id))
+    .where(and(ne(seasons.id, season.id), eq(seasons.market, market)))
     .orderBy(desc(seasons.startsAt))
     .limit(1);
   if (prior) {
