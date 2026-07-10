@@ -31,4 +31,8 @@ if (!isLocal) {
   console.log("[migrate] ALLOW_PROD_MIGRATE=1 확인 — 프로덕션 마이그레이션 실행.");
 }
 
-execSync("drizzle-kit migrate", { stdio: "inherit" });
+try {
+  execSync("drizzle-kit migrate", { stdio: "inherit" });
+} catch (e: any) {
+  process.exit(e.status ?? 1);
+}
