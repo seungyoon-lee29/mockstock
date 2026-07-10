@@ -10,11 +10,11 @@ import {
   finalizeDueSeasons,
   resetSeason,
   snapshotPortfolios,
+  type Market,
   type SeasonConfig,
 } from "@mockstock/shared";
 import { instruments, minuteCandles } from "@mockstock/shared/schema";
 import { getDb } from "./db";
-import { updateFxRates } from "./fx";
 
 const TZ = "Asia/Seoul";
 const MINUTE_CANDLE_RETENTION_DAYS = Math.max(1, Number(process.env.MINUTE_CANDLE_RETENTION_DAYS ?? 30));
@@ -82,27 +82,32 @@ export function startCron(): void {
     return;
   }
   const cfg = seasonConfig();
-  const sweepMin = Math.max(1, Number(process.env.FINALIZE_SWEEP_MINUTES ?? 5));
 
   // 부팅 스윕(§4.1 수동 재트리거 런북) — 밀린 확정 처리 후 현재 시즌 보장. 멱등이라 반복 안전.
   void runNotified("부팅 스윕", async () => {
     const finalized = await finalizeDueSeasons(db);
-    await ensureActiveSeason(db, cfg);
+    await ensureActiveSeason(db, cfg, "KR");
+    await ensureActiveSeason(db, cfg, "US");
     return { finalized };
   });
 
-  // ① 시즌 리셋 — 월 08:30(KR 개장 전).
-  cron.schedule("30 8 * * 1", () => void runNotified("시즌 리셋", () => resetSeason(db, cfg)), { timezone: TZ });
-  // ② 확정 스윕 — 매 N분(상태 기반 멱등). noOverlap 로 장기 실행 중 중복 발사 차단.
-  cron.schedule(`*/${sweepMin} * * * *`, () => void runNotified("확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
-  // ③ 일별 스냅샷 — 15:40(당일 KR 종가 반영, MDD용 §4.2).
-  cron.schedule("40 15 * * 1-5", () => void runNotified("일별 스냅샷", () => snapshotPortfolios(db)), { timezone: TZ });
+  // ① KR 리셋 — 월 08:30 KST(KR 개장 전). US 리셋 — 월 22:00 KST(≈미 동부 월 09:00 여름 개장 전).
+  cron.schedule("30 8 * * 1", () => void runNotified("KR 시즌 리셋", () => resetSeason(db, cfg, "KR")), { timezone: TZ });
+  cron.schedule("0 22 * * 1", () => void runNotified("US 시즌 리셋", () => resetSeason(db, cfg, "US")), { timezone: TZ });
+  // ② 확정 스윕 — 각 리그 마감창에서만(상시 5분 스윕 금지, Neon 보존 B13). endsAt<=now & active 를 스캔하는
+  //    상태 기반 멱등 스윕이라 다운타임에도 다음 창에서 밀린 시즌을 잡는다. noOverlap 로 중복 발사 차단.
+  //    KR: 금 15:35~16:05 매 5분(15:30 마감 직후). US: 토 05:05~06:05 매 5분(≈금 16:00 ET 마감 직후, DST 여유).
+  cron.schedule("35-59/5 15 * * 5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  cron.schedule("0-5 16 * * 5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  cron.schedule("5-59/5 5 * * 6", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  cron.schedule("0-5 6 * * 6", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  // ③ 일별 스냅샷 — KR 15:40(당일 KR 종가), US 06:10 KST 토(≈미 동부 금 종가 반영, MDD용 §4.2).
+  cron.schedule("40 15 * * 1-5", () => void runNotified("KR 스냅샷", () => snapshotPortfolios(db)), { timezone: TZ });
+  cron.schedule("10 6 * * 2-6", () => void runNotified("US 스냅샷", () => snapshotPortfolios(db)), { timezone: TZ });
   // ④ prevClose 갱신 — 07:30.
   cron.schedule("30 7 * * 1-5", () => void runNotified("prevClose 갱신", () => updatePrevClose(db)), { timezone: TZ });
-  // ⑤ 환율 갱신 — 09:00(금 15:30 확정에 선행, §6.6).
-  cron.schedule("0 9 * * 1-5", () => void runNotified("환율 갱신", () => updateFxRates(db)), { timezone: TZ });
-  // ⑥ 분봉 보존 — 매일 04:20 KST(KR 이른 새벽·장외지만 US 정규장 14:20/15:20 ET와 겹침), N일 초과 prune.
+  // ⑤ 분봉 보존 — 매일 04:20 KST, N일 초과 prune.
   cron.schedule("20 4 * * *", () => void runNotified("분봉 prune", () => pruneMinuteCandles(db)), { timezone: TZ });
 
-  console.log(`[cron] 등록 완료 (Asia/Seoul, 확정 스윕 매 ${sweepMin}분, 분봉 보존 ${MINUTE_CANDLE_RETENTION_DAYS}일)`);
+  console.log(`[cron] 등록 완료 (Asia/Seoul, 확정=리그별 마감창, 분봉 보존 ${MINUTE_CANDLE_RETENTION_DAYS}일)`);
 }
