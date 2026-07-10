@@ -1,9 +1,8 @@
 "use client";
 
 // 포트폴리오 — 총자산·보유 종목·미체결 주문·실현손익. 로그인 게이트 + SSE 실시간 평가.
-// 서버(/api/portfolio)는 numeric 원문만 주고, 평가액은 여기서 usePrices 현재가·fxRate로 재계산한다(§9).
-// US 평가는 fxRate>0일 때만 원화 환산 — 없으면 "환산 불가"로 명시 표기(총자산에서도 제외).
-import { useState } from "react";
+// 리그 단일 통화: US 리그=USD, KR 리그=KRW. fxRate 환산 없음 — 항상 네이티브 통화로 평가.
+import { use, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { getEntry, keyOf, type Currency, type Market, type Quote } from "@mockstock/shared";
@@ -41,28 +40,27 @@ function currencyOf(market: Market, symbol: string): Currency {
   return getEntry(market, symbol)?.currency ?? (market === "US" ? "USD" : "KRW");
 }
 
-/** 포지션 1건 실시간 평가(KRW). US는 fxRate>0에서만 환산 가능 — 불가 시 valuationKrw=null. */
-function valuePosition(p: PortfolioPosition, quote: Quote | undefined, fxRate: number) {
+/** 포지션 1건 실시간 평가(리그 네이티브 통화). fxRate 환산 없음 — 리그 단일 통화. */
+function valuePosition(p: PortfolioPosition, quote: Quote | undefined, currency: Currency) {
   const qty = Number(p.qty);
-  const cost = Number(p.costBasisKrw);
+  const cost = Number(p.costBasis);
   const price = quote?.price ?? getEntry(p.market, p.symbol)?.seedPrice ?? 0;
-  const nativeValue = qty * price;
-  const valuationKrw =
-    p.market === "US" ? (fxRate > 0 ? nativeValue * fxRate : null) : nativeValue;
-  const pnlKrw = valuationKrw == null ? null : valuationKrw - cost;
-  const pnlPct = valuationKrw == null || cost === 0 ? null : (pnlKrw! / cost) * 100;
-  return { price, valuationKrw, pnlKrw, pnlPct };
+  const valuation = qty * price;
+  const pnl = valuation - cost;
+  const pnlPct = cost === 0 ? null : (pnl / cost) * 100;
+  return { price, valuation, pnl, pnlPct, currency };
 }
 
-async function fetchPortfolio(): Promise<PortfolioResponse | null> {
-  const res = await fetch("/api/portfolio", { cache: "no-store" });
+async function fetchPortfolio(league: string): Promise<PortfolioResponse | null> {
+  const res = await fetch(`/api/portfolio?league=${league}`, { cache: "no-store" });
   if (res.status === 401) throw new Error("unauthorized");
   if (res.status === 404) return null; // 진행 중인 시즌 없음
   if (!res.ok) throw new Error("포트폴리오를 불러오지 못했습니다.");
   return res.json();
 }
 
-export default function PortfolioPage() {
+export default function LeaguePortfolioPage({ params }: { params: Promise<{ league: string }> }) {
+  const { league } = use(params);
   const { data: session, isPending } = authClient.useSession();
   const isGuest =
     !session || (session.user as { isAnonymous?: boolean }).isAnonymous === true;
@@ -76,15 +74,15 @@ export default function PortfolioPage() {
       {isPending ? (
         <Skeleton className="h-40 w-full rounded-2xl" />
       ) : isGuest ? (
-        <LoginPrompt />
+        <LoginPrompt league={league} />
       ) : (
-        <PortfolioView />
+        <PortfolioView league={league} />
       )}
     </main>
   );
 }
 
-function LoginPrompt() {
+function LoginPrompt({ league }: { league: string }) {
   return (
     <Card className="mx-auto max-w-md text-center">
       <CardHeader>
@@ -97,7 +95,7 @@ function LoginPrompt() {
         <Button
           className="w-full rounded-full font-semibold"
           onClick={() =>
-            authClient.signIn.social({ provider: "google", callbackURL: "/portfolio" })
+            authClient.signIn.social({ provider: "google", callbackURL: `/${league}/portfolio` })
           }
         >
           Google로 로그인
@@ -106,7 +104,7 @@ function LoginPrompt() {
           variant="outline"
           className="w-full rounded-full font-semibold"
           onClick={() =>
-            authClient.signIn.social({ provider: "github", callbackURL: "/portfolio" })
+            authClient.signIn.social({ provider: "github", callbackURL: `/${league}/portfolio` })
           }
         >
           GitHub로 로그인
@@ -116,12 +114,13 @@ function LoginPrompt() {
   );
 }
 
-function PortfolioView() {
+function PortfolioView({ league }: { league: string }) {
   const queryClient = useQueryClient();
   const [cancelingId, setCancelingId] = useState<string | null>(null);
+  // ponytail: league가 바뀌면 다른 캐시 키 사용 → 교차 오염 방지
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["portfolio"],
-    queryFn: fetchPortfolio,
+    queryKey: ["portfolio", league],
+    queryFn: () => fetchPortfolio(league),
     refetchInterval: 30_000,
     retry: 1,
   });
@@ -140,7 +139,7 @@ function PortfolioView() {
         return;
       }
       toast.success(body.message ?? "주문을 취소했습니다.");
-      await queryClient.invalidateQueries({ queryKey: ["portfolio"] });
+      await queryClient.invalidateQueries({ queryKey: ["portfolio", league] });
     } finally {
       setCancelingId(null);
     }
@@ -164,20 +163,19 @@ function PortfolioView() {
       </Card>
     );
 
-  const fxRate = data.fxRate;
-  const cash = Number(data.cashKrw);
-  const reserved = Number(data.reservedKrw);
-  const realized = Number(data.realizedPnlKrw);
+  // 리그 단일 통화 — fxRate 없음
+  const currency: Currency = league === "us" ? "USD" : "KRW";
+  const cash = Number(data.cash);
+  const reserved = Number(data.reserved);
+  const realized = Number(data.realizedPnl);
 
-  let holdingsKrw = 0;
-  let hasUnconvertible = false;
+  let holdingsValue = 0;
   const rows = positions.map((p) => {
-    const v = valuePosition(p, quotes[keyOf(p.market, p.symbol)], fxRate);
-    if (v.valuationKrw == null) hasUnconvertible = true;
-    else holdingsKrw += v.valuationKrw;
+    const v = valuePosition(p, quotes[keyOf(p.market, p.symbol)], currency);
+    holdingsValue += v.valuation;
     return { p, ...v };
   });
-  const totalKrw = cash + reserved + holdingsKrw;
+  const total = cash + reserved + holdingsValue;
 
   return (
     <div className="flex flex-col gap-6">
@@ -186,20 +184,15 @@ function PortfolioView() {
         <CardHeader>
           <CardDescription>총자산</CardDescription>
           <CardTitle className="text-3xl tabular-nums">
-            {formatPrice(totalKrw, "KRW")}
+            {formatPrice(total, currency)}
           </CardTitle>
-          {hasUnconvertible && (
-            <p className="text-xs text-muted-foreground">
-              * 환율 정보가 없어 일부 해외 종목은 원화 환산·합산에서 제외되었습니다.
-            </p>
-          )}
         </CardHeader>
         <CardContent className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Stat label="현금" value={formatPrice(cash, "KRW")} />
-          <Stat label="예약 현금" value={formatPrice(reserved, "KRW")} />
+          <Stat label="현금" value={formatPrice(cash, currency)} />
+          <Stat label="예약 현금" value={formatPrice(reserved, currency)} />
           <Stat
             label="실현손익"
-            value={formatSignedPrice(realized, "KRW")}
+            value={formatSignedPrice(realized, currency)}
             className={changeClass(realized)}
           />
         </CardContent>
@@ -226,8 +219,8 @@ function PortfolioView() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map(({ p, price, valuationKrw, pnlKrw, pnlPct }) => {
-                    const currency = currencyOf(p.market, p.symbol);
+                  {rows.map(({ p, price, valuation, pnl, pnlPct }) => {
+                    const posCurrency = currencyOf(p.market, p.symbol);
                     const name = getEntry(p.market, p.symbol)?.name ?? p.symbol;
                     return (
                       <TableRow key={keyOf(p.market, p.symbol)}>
@@ -241,17 +234,15 @@ function PortfolioView() {
                           {Number(p.qty).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {formatPrice(price, currency)}
+                          {formatPrice(price, posCurrency)}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {valuationKrw == null ? "환산 불가" : formatPrice(valuationKrw, "KRW")}
+                          {formatPrice(valuation, currency)}
                         </TableCell>
                         <TableCell
-                          className={cn("text-right tabular-nums", pnlKrw != null && changeClass(pnlKrw))}
+                          className={cn("text-right tabular-nums", changeClass(pnl))}
                         >
-                          {pnlKrw == null
-                            ? "—"
-                            : `${formatSignedPrice(pnlKrw, "KRW")}${pnlPct != null ? ` (${formatPct(pnlPct)})` : ""}`}
+                          {`${formatSignedPrice(pnl, currency)}${pnlPct != null ? ` (${formatPct(pnlPct)})` : ""}`}
                         </TableCell>
                       </TableRow>
                     );
@@ -285,7 +276,7 @@ function PortfolioView() {
                 </TableHeader>
                 <TableBody>
                   {data.openOrders.map((o) => {
-                    const currency = currencyOf(o.market, o.symbol);
+                    const orderCurrency = currencyOf(o.market, o.symbol);
                     const name = getEntry(o.market, o.symbol)?.name ?? o.symbol;
                     return (
                       <TableRow key={o.id}>
@@ -306,7 +297,7 @@ function PortfolioView() {
                           {Number(o.qty).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {o.limitPrice ? formatPrice(Number(o.limitPrice), currency) : "시장가"}
+                          {o.limitPrice ? formatPrice(Number(o.limitPrice), orderCurrency) : "시장가"}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button
