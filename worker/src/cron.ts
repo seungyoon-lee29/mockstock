@@ -1,7 +1,6 @@
-// 크론 5종 — 전부 워커 node-cron(Vercel Cron 미사용, B7), 전부 timezone 'Asia/Seoul'(§7.6).
-//  ① 시즌 리셋(월 08:30)  ② 확정 스윕(부팅 1회 + 매 N분)  ③ 일별 스냅샷(15:40)
-//  ④ prevClose 갱신(07:30, prevCloseDate 멱등)  ⑤ 환율 갱신(09:00)
-// 각 실행의 완료·실패를 Discord webhook(env DISCORD_WEBHOOK_URL)으로 통지, 없으면 콘솔.
+// 크론 워커 node-cron(Vercel Cron 미사용, B7), 전부 timezone 'Asia/Seoul'(§7.6).
+// 리그별 리셋(월 08:30) · 리그별 확정 마감창(15:30~15:40) · 리그별 스냅샷(15:40) · prevClose 갱신(07:30)
+// 분봉 prune(매시간) · 각 실행의 완료·실패를 Discord webhook(env DISCORD_WEBHOOK_URL)으로 통지, 없으면 콘솔.
 // DATABASE_URL 없으면 스케줄 자체를 건너뛴다 — mock 로컬 데모(키 불필요)가 깨지지 않도록.
 import cron from "node-cron";
 import { sql } from "drizzle-orm";

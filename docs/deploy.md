@@ -70,7 +70,6 @@ curl https://<worker-domain>/health
 | `DISCORD_WEBHOOK_URL` | secret | 선택 | 크론 완료·실패 통지. URL 자체가 자격증명. 없으면 콘솔 로그. |
 | `SEASON_DURATION_MS` | config | 선택 | 시즌 고정 길이(ms). 미설정=주간(월 00:00→금 15:30 KST). |
 | `SEASON_SEED_KRW` | config | 선택 | 시드머니. 미설정=1,000만. |
-| `FINALIZE_SWEEP_MINUTES` | config | 선택 | 확정 스윕 주기(분). 미설정=5. |
 | `BOT_COUNT` | config | 선택 | 벤치마크 봇 수. 미설정=3. `DATABASE_URL` 없으면 자동 비활성. |
 | `BOT_INTERVAL_SEC` | config | 선택 | 봇 매매 주기(초). 미설정=45. |
 | `BOT_ORDER_PCT` | config | 선택 | 봇 1회 주문 비율. 미설정=0.1. |
