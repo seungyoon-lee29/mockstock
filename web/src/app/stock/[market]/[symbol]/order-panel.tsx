@@ -230,15 +230,6 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
           >
             Google로 로그인
           </Button>
-          <Button
-            variant="outline"
-            className="w-full rounded-full font-semibold"
-            onClick={() =>
-              authClient.signIn.social({ provider: "github", callbackURL: pathname })
-            }
-          >
-            GitHub로 로그인
-          </Button>
         </div>
       )}
 

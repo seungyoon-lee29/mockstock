@@ -100,15 +100,6 @@ function LoginPrompt({ league }: { league: string }) {
         >
           Google로 로그인
         </Button>
-        <Button
-          variant="outline"
-          className="w-full rounded-full font-semibold"
-          onClick={() =>
-            authClient.signIn.social({ provider: "github", callbackURL: `/${league}/portfolio` })
-          }
-        >
-          GitHub로 로그인
-        </Button>
       </CardContent>
     </Card>
   );

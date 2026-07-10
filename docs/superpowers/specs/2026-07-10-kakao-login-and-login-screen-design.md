@@ -229,7 +229,7 @@ Vercel 프로젝트 env에도 같은 두 키를 추가한다(배포 시 `BETTER_
 ## 8. 스코프 밖
 
 - **Capacitor 앱 래핑** — 서브프로젝트 ②. `/login`이 나중에 앱 웹뷰 최초 화면으로 쓰인다는 비고만 남긴다(상단 비고 참조).
-- **GitHub 프로바이더 제거 여부** — 현행 유지. 서버 설정(`auth.ts` L42–45)과 env는 그대로 두고 `/login`에 버튼만 두지 않는다.
+- **GitHub 프로바이더 제거 여부** — GitHub 제거됨(별도 작업). 서버 설정·UI 버튼·env 모두 삭제됨.
 - **애플 로그인.**
 - **계정 연결(accountLinking) 커스텀** — trustedProviders·수동 링크 UI 등. v1은 Better Auth 기본값.
 - **카카오 비즈 앱 전환·`account_email` 스코프** — 전환 시 §1.2 스코프 배열에 추가만 하면 됨.

@@ -1,4 +1,4 @@
-// Better Auth v1.6 서버 설정 (T03). drizzleAdapter(pg) + google/github 소셜 +
+// Better Auth v1.6 서버 설정 (T03). drizzleAdapter(pg) + google 소셜 +
 // anonymous 게스트 + nextCookies. env 접근은 전부 런타임 lazy — 키·DB 없이 빌드 통과.
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -38,10 +38,6 @@ export const auth = betterAuth({
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID as string,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
-    },
-    github: {
-      clientId: process.env.GITHUB_CLIENT_ID as string,
-      clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
     },
   },
   plugins: [

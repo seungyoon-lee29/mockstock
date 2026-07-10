@@ -255,7 +255,7 @@ function ReplaySession({
   const pathname = usePathname(); // 로그인 후 이 종목으로 복귀시킬 callbackURL
 
   // 게스트 완주 결과를 sessionStorage에 보존 후 소셜 로그인(§194). 복귀 시 ReplayPlayer가 재제출.
-  function saveViaLogin(provider: "google" | "github") {
+  function saveViaLogin(provider: "google") {
     savePendingReplay({
       id: crypto.randomUUID(),
       scenarioId: REPLAY_SCENARIO_ID,
@@ -454,7 +454,7 @@ function ResultCard({
   revealTail: boolean;
   onRevealTail: () => void;
   saveState: "idle" | "saved" | "guest";
-  onSaveViaLogin: (provider: "google" | "github") => void;
+  onSaveViaLogin: (provider: "google") => void;
   onReset: () => void;
 }) {
   return (
@@ -499,13 +499,6 @@ function ResultCard({
             </p>
             <Button className="w-full rounded-full font-semibold" onClick={() => onSaveViaLogin("google")}>
               Google로 로그인하고 저장
-            </Button>
-            <Button
-              variant="outline"
-              className="w-full rounded-full font-semibold"
-              onClick={() => onSaveViaLogin("github")}
-            >
-              GitHub로 로그인하고 저장
             </Button>
           </div>
         )}
