@@ -1,7 +1,12 @@
 // 워커 /snapshot 클라이언트 (T04). 시장가 체결가는 오직 여기서 온다 — 클라이언트가 보낸
 // 가격은 절대 신뢰하지 않는다(§6.1). 타임아웃·연결 실패는 호출부에서 스테일과 동일하게
 // fail-closed 처리하도록 null을 반환한다. env는 런타임 lazy 접근(빌드 타임 미평가).
-import type { Market } from "@mockstock/shared";
+import type {
+  ChartTimeframe,
+  DailyCandle,
+  IntradayCandle,
+  Market,
+} from "@mockstock/shared";
 
 // PRD §6.1: 워커 /snapshot 호출 2~3초 타임아웃. 초과 시 abort → null(fail-closed).
 const SNAPSHOT_TIMEOUT_MS = 2_500;
@@ -40,6 +45,50 @@ export async function fetchSnapshot(market: Market, symbol: string): Promise<Sna
     return arr.find((t) => t.market === market && t.symbol === symbol) ?? null;
   } catch {
     return null; // 타임아웃·네트워크 실패 → fail-closed(§6.1)
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 워커 GET /candles/backfill 에서 과거 캔들을 조회한다(멀티 타임프레임 v2 — 부족 과거 구간 보강).
+ * from/to = epoch **초**. 분봉 tf → IntradayCandle[], 일봉 계열 → DailyCandle[](워커 계약).
+ * 백필은 장식이라 **fail-open**: 미설정·연결 실패·타임아웃·비200·비배열 응답 전부 null →
+ * 호출부(/api/candles)는 조용히 DB-only로 강등한다.
+ * 타임아웃은 외부 API(KIS/Alpaca) 경유라 스냅샷(2.5s)과 별개 env — BACKFILL_TIMEOUT_MS(기본 8000).
+ */
+export async function fetchBackfillCandles(
+  market: Market,
+  symbol: string,
+  tf: ChartTimeframe,
+  from: number,
+  to: number,
+): Promise<IntradayCandle[] | DailyCandle[] | null> {
+  const snapshotUrl = process.env.WORKER_SNAPSHOT_URL;
+  const secret = process.env.WORKER_SECRET;
+  if (!snapshotUrl) return null; // 미설정(키 없는 로컬) → 백필 없음, DB-only
+
+  const url = new URL("/candles/backfill", snapshotUrl); // /snapshot → /candles/backfill (sync와 동일 파생)
+  url.searchParams.set("market", market);
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("tf", tf);
+  url.searchParams.set("from", String(from));
+  url.searchParams.set("to", String(to));
+
+  const timeoutMs = Number(process.env.BACKFILL_TIMEOUT_MS) || 8_000; // env 런타임 lazy 접근
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: secret ? { "x-worker-secret": secret } : {},
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const arr: unknown = await res.json();
+    return Array.isArray(arr) ? (arr as IntradayCandle[] | DailyCandle[]) : null;
+  } catch {
+    return null; // 타임아웃·네트워크 실패 → fail-open(백필 없이 서빙)
   } finally {
     clearTimeout(timer);
   }

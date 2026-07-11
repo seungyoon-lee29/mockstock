@@ -10,6 +10,7 @@ import { startCron } from "./cron";
 import { startBots } from "./bots";
 import { getDb, closeDb } from "./db";
 import { seedInstruments, tapTick, startLastPriceFlush, flushLastPrices } from "./instruments";
+import { handleBackfill } from "./candles/backfillRoute";
 
 assertProductionConfig(); // 프로덕션 fail-closed 부팅 게이트 (worker.md) — 시크릿/CORS 없으면 기동 거부
 
@@ -46,6 +47,20 @@ startCron(); // T06
 startBots(book); // T07 — 공개 벤치마크 봇(DATABASE_URL 없으면 자동 비활성)
 
 const server = createHttpServer(book);
+// /candles/backfill 배선(멀티 타임프레임 v2 배치 B) — sse.ts 라우터는 배치 파일 경계상 불변,
+// request 리스너 앞단에서 경로만 가로챈다(그 외 경로는 기존 핸들러 그대로).
+const baseListeners = server.listeners("request") as Array<
+  (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void
+>;
+server.removeAllListeners("request");
+server.on("request", (req, res) => {
+  if ((req.url ?? "").startsWith("/candles/backfill")) {
+    res.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
+    void handleBackfill(req, res);
+    return;
+  }
+  for (const l of baseListeners) l.call(server, req, res);
+});
 server.listen(config.port, () => {
   console.log(`[worker] http://localhost:${config.port} (health/snapshot/stream)`);
 });

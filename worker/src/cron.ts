@@ -14,6 +14,7 @@ import {
 } from "@mockstock/shared";
 import { instruments, minuteCandles } from "@mockstock/shared/schema";
 import { getDb } from "./db";
+import { bootBackfillDailyCandles, syncDailyCandles } from "./candles/dailySync";
 
 const TZ = "Asia/Seoul";
 const MINUTE_CANDLE_RETENTION_DAYS = Math.max(1, Number(process.env.MINUTE_CANDLE_RETENTION_DAYS ?? 30));
@@ -100,6 +101,10 @@ export function startCron(): void {
     return { finalized };
   });
 
+  // 일봉 부팅 백필(멀티 타임프레임 v2) — 심볼별 max(date) 갭만 보충(기본 730일, 멱등).
+  // 부팅 1회 버스트라 B13과 양립. 키 전무+테이블 빈 상태면 내부에서 Discord 1회 경고.
+  void runNotified("일봉 부팅 백필", () => bootBackfillDailyCandles(db, notify));
+
   // ① KR 리셋 — 월 08:30 KST(KR 개장 전). US 리셋 — 월 22:00 KST(≈미 동부 월 09:00 여름 개장 전).
   cron.schedule("30 8 * * 1", () => void runNotified("KR 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "KR"), "KR")), { timezone: TZ });
   cron.schedule("0 22 * * 1", () => void runNotified("US 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "US"), "US")), { timezone: TZ });
@@ -115,6 +120,11 @@ export function startCron(): void {
   //    US 토 스냅샷 슬롯(06:10) 폐지: US 시즌은 토 06:05까지 확정되고 장중 KST 주간은 US 장이 닫혀 있어
   //    화~금 실행분이 15:40과 동일 값이므로 구조적 no-op이다.
   cron.schedule("40 15 * * 1-5", () => void runNotified("스냅샷", () => snapshotPortfolios(db)), { timezone: TZ });
+  // ⑦ daily_candles 동기화(멀티 타임프레임 v2) — 마감 후 기존 슬롯 편승, 멱등 upsert.
+  //    KR: 15:40 스냅샷 슬롯 동시각(KR 15:30 마감 직후). US: 07:30 화~토(US 마감 05~06시 KST 이후,
+  //    DST 여유 — 토요일 실행이 금요일 세션을 커버). 키 없으면 내부 no-op(fail-soft).
+  cron.schedule("40 15 * * 1-5", () => void runNotified("KR 일봉 동기화", () => syncDailyCandles(db, "KR")), { timezone: TZ, noOverlap: true });
+  cron.schedule("30 7 * * 2-6", () => void runNotified("US 일봉 동기화", () => syncDailyCandles(db, "US")), { timezone: TZ, noOverlap: true });
   // ④ prevClose 갱신 — 07:30.
   cron.schedule("30 7 * * 1-5", () => void runNotified("prevClose 갱신", () => updatePrevClose(db)), { timezone: TZ });
   // ⑤ 분봉 보존 — 매일 04:20 KST, N일 초과 prune.

@@ -13,7 +13,8 @@ import {
   type LineData,
   type Time,
 } from "lightweight-charts";
-import { PRICE_COLORS } from "@mockstock/shared";
+import { PRICE_COLORS, TF_MINUTES, type ChartTimeframe, type Currency } from "@mockstock/shared";
+import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
 
 export type PriceChartType = "candlestick" | "line";
@@ -43,6 +44,10 @@ type PriceChartProps = {
   symbol?: string;
   type?: PriceChartType;
   data: CandlestickData<Time>[] | LineData<Time>[];
+  /** 타임프레임 — 분봉 tf면 x축에 시각(HH:mm) 표시. 미지정 시 기존 동작(날짜만). */
+  timeframe?: ChartTimeframe;
+  /** 지정 시 y축 가격 라벨을 통화 포맷(KRW 정수·USD 2자리, format.ts)으로 표기. */
+  currency?: Currency;
   /** 차트 높이(px). */
   height?: number;
   className?: string;
@@ -52,6 +57,8 @@ export function PriceChart({
   symbol,
   type = "candlestick",
   data,
+  timeframe,
+  currency,
   height = 320,
   className,
 }: PriceChartProps) {
@@ -60,7 +67,11 @@ export function PriceChart({
     ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | null
   >(null);
 
-  // 차트 + 시리즈 생성/파기. 타입 변경 시에만 재생성. 앱은 다크 고정이라 테마 런타임 반응 생략.
+  // 분봉↔일봉 카테고리 — Time 타입(UTCTimestamp vs "YYYY-MM-DD" 문자열)이 한 시리즈에 섞이면
+  // lightweight-charts가 throw한다. 카테고리 전환 시 차트·시리즈를 재생성한다(생성 effect deps).
+  const isMinute = timeframe != null && timeframe in TF_MINUTES;
+
+  // 차트 + 시리즈 생성/파기. 타입·tf 카테고리·통화 변경 시에만 재생성. 앱은 다크 고정이라 테마 런타임 반응 생략.
   // ponytail: 라이트/다크 토글이 생기면 테마를 deps에 추가.
   useEffect(() => {
     const el = containerRef.current;
@@ -88,7 +99,12 @@ export function PriceChart({
           horzLines: { visible: false },
         },
         rightPriceScale: { borderVisible: false },
-        timeScale: { borderVisible: false },
+        timeScale: { borderVisible: false, timeVisible: isMinute, secondsVisible: false },
+        localization: {
+          locale: "ko-KR",
+          // 통화 미지정이면 라이브러리 기본 포맷(기존 동작) 유지.
+          ...(currency ? { priceFormatter: (p: number) => formatPrice(p, currency) } : {}),
+        },
       });
 
       if (type === "line") {
@@ -124,8 +140,9 @@ export function PriceChart({
       seriesRef.current = null;
     };
     // data는 아래 별도 effect가 setData로 갱신 → 데이터 변경 시 차트 재생성 안 함(리플레이 스트리밍 대비).
+    // isMinute(tf 카테고리)는 deps 필수 — 분↔일 전환 시 재생성해야 Time 타입이 안 섞인다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type]);
+  }, [type, isMinute, currency]);
 
   // 데이터 주입 갱신. 시리즈 union 때문에 setData 인자는 never 캐스팅(런타임은 필드만 읽어 안전).
   useEffect(() => {

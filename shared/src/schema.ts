@@ -214,6 +214,26 @@ export const minuteCandles = pgTable(
 );
 
 /**
+ * 일봉 영속(멀티 타임프레임 v2). worker 크론이 마감 후 upsert(+부팅 백필), web이 일·주·월 tf 조회.
+ * date = **거래소 로컬 거래일**(KR=KST, US=ET) — US 세션은 KST로 이틀에 걸치므로 KST date 사용 금지.
+ * PK(market,symbol,date)가 범위 조회 인덱스를 겸함 → 별도 index 불필요.
+ */
+export const dailyCandles = pgTable(
+  "daily_candles",
+  {
+    market: marketEnum("market").notNull(),
+    symbol: text("symbol").notNull(),
+    date: date("date").notNull(), // 거래소 로컬 거래일
+    o: numeric("o", { precision: 18, scale: 2 }).notNull(),
+    h: numeric("h", { precision: 18, scale: 2 }).notNull(),
+    l: numeric("l", { precision: 18, scale: 2 }).notNull(),
+    c: numeric("c", { precision: 18, scale: 2 }).notNull(),
+    v: numeric("v", { precision: 20, scale: 0 }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.market, t.symbol, t.date] })],
+);
+
+/**
  * AI 투자 성향 요약 캐시 (§D8, 0005). 시즌×유저당 1로우 — GET lazy 생성.
  * status: 'pending'(생성 중 placeholder·lease) → 'ok' | 'insufficient'(체결 부족) | 'failed'(LLM 오류).
  * pending placeholder 단계에서는 summary/traits/model/input_hash 전부 NULL(계약).

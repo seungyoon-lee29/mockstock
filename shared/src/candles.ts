@@ -11,6 +11,33 @@ export type DailyCandle = { date: string; o: number; h: number; l: number; c: nu
 /** 분봉. time=epoch **초**(분 버킷 시작). lightweight-charts UTCTimestamp와 호환. */
 export type IntradayCandle = { time: number; o: number; h: number; l: number; c: number; v: number };
 
+/** 차트 타임프레임 토글 값 — /api/candles `tf` 파라미터와 1:1. */
+export type ChartTimeframe = "1m" | "5m" | "10m" | "15m" | "30m" | "60m" | "day" | "week" | "month";
+
+/** 분봉 tf → 버킷 분수. 일·주·월은 daily_candles 경로라 여기 없음. */
+export const TF_MINUTES: Record<"1m" | "5m" | "10m" | "15m" | "30m" | "60m", number> = {
+  "1m": 1,
+  "5m": 5,
+  "10m": 10,
+  "15m": 15,
+  "30m": 30,
+  "60m": 60,
+};
+
+/**
+ * per-tf 캡·룩백 (/api/candles 계약의 단일 소스).
+ * 주의: 분봉 tf의 1분 **로우** 조회 한도는 반드시 캔들캡×분수(intradayCandleCap × minutes) —
+ * 롤업 전에 캔들캡을 로우에 적용하면 60m가 4개 캔들로 붕괴하는 함정(리뷰 확정, 재론 금지).
+ */
+export const CANDLE_LIMITS = {
+  /** 분봉 tf 응답 캔들 캡(기존 MAX_CANDLES=240과 동일 의미 — 롤업 **후** 캔들 수 기준). */
+  intradayCandleCap: 240,
+  /** 일봉 룩백 기본(일 수). week/month는 day에서 파생 — 별도 캡 불요(이미 ≤ dayRowCap). */
+  dayLookbackDays: 730,
+  /** 일봉 로우 캡. */
+  dayRowCap: 750,
+} as const;
+
 /** 날짜("YYYY-MM-DD")가 속한 ISO주(월요일) 시작일을 UTC로 계산 → 같은 주 판별 키. */
 function isoWeekStart(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
@@ -41,6 +68,55 @@ export function aggregateDailyToWeekly(daily: DailyCandle[]): DailyCandle[] {
     }
   }
   return weeks;
+}
+
+/**
+ * 1분봉 → N분봉 롤업. 버킷 = epoch floor(time - time % (minutes×60)) — **정시(top-of-hour) 관례**:
+ * US 09:30 개장의 60분 첫 봉은 09:00 앵커 스텁(09:30~09:59 실데이터)이 된다(v2 확정 결정).
+ * 입력 오름차순 가정, 출력 오름차순. o=버킷 첫 시가, h=max, l=min, c=마지막 종가, v=Σ.
+ */
+export function aggregateIntraday(candles: IntradayCandle[], minutes: number): IntradayCandle[] {
+  if (minutes <= 1) return candles; // 1분은 이미 그 해상도 — 그대로 반환
+  const size = minutes * SECONDS_PER_MINUTE;
+  const out: IntradayCandle[] = [];
+  for (const c of candles) {
+    const bucket = c.time - (c.time % size);
+    const last = out[out.length - 1];
+    if (last === undefined || last.time !== bucket) {
+      // 새 버킷 — 첫 분봉 기준으로 open. 이후 같은 버킷 분봉이 h/l/c/v를 갱신.
+      out.push({ time: bucket, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v });
+    } else {
+      if (c.h > last.h) last.h = c.h;
+      if (c.l < last.l) last.l = c.l;
+      last.c = c.c; // 버킷 마지막 분봉 종가로 계속 갱신
+      last.v += c.v;
+    }
+  }
+  return out;
+}
+
+/**
+ * 일봉 배열을 월봉(YYYY-MM 그룹)으로 집계. 주봉(aggregateDailyToWeekly)과 동일 관례 —
+ * date=월 첫 거래일. 입력은 날짜 오름차순 가정, 빈 배열 안전.
+ */
+export function aggregateDailyToMonthly(daily: DailyCandle[]): DailyCandle[] {
+  const months: DailyCandle[] = [];
+  let key = "";
+  for (const d of daily) {
+    const mo = d.date.slice(0, 7); // "YYYY-MM"
+    if (mo !== key) {
+      // 새 달 — 월 첫 거래일 기준으로 open. 이후 같은 달 캔들이 h/l/c/v를 갱신.
+      months.push({ date: d.date, o: d.o, h: d.h, l: d.l, c: d.c, v: d.v });
+      key = mo;
+    } else {
+      const m = months[months.length - 1];
+      if (d.h > m.h) m.h = d.h;
+      if (d.l < m.l) m.l = d.l;
+      m.c = d.c; // 월 마지막 거래일 종가로 계속 갱신
+      m.v += d.v;
+    }
+  }
+  return months;
 }
 
 /**

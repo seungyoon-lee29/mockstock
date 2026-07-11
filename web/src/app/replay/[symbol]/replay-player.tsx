@@ -46,10 +46,11 @@ import {
 const TRADE_FRACTIONS = [0.25, 0.5, 1] as const;
 const fractionLabel = (f: number) => (f === 1 ? "전량" : `${Math.round(f * 100)}%`);
 
-// 차트 타임프레임 토글(일/주). 재생·매매·성적은 일봉 인덱스 기준이고 주봉은 표시에만 영향.
+// 차트 타임프레임 토글(일/주/월). 재생·매매·성적은 일봉 인덱스 기준이고 주·월봉은 표시에만 영향.
 const TIMEFRAMES = [
   { id: "day", label: "일" },
   { id: "week", label: "주" },
+  { id: "month", label: "월" },
 ] as const satisfies readonly { id: Timeframe; label: string }[];
 
 export function ReplayPlayer({ symbol }: { symbol: string }) {
@@ -304,7 +305,7 @@ function ReplaySession({
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card>
           <CardContent className="px-2">
-            <PriceChart symbol={symbol} data={chartData} height={360} />
+            <PriceChart symbol={symbol} data={chartData} currency={currency} height={360} />
           </CardContent>
         </Card>
 

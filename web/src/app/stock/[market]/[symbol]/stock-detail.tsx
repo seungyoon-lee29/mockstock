@@ -1,36 +1,52 @@
 "use client";
 
-// 종목 상세: 현재가·등락 + SSE 틱 차트(라인/1분봉 토글) + 주문 패널.
-// 라인=실시간 틱 누적, 1분=클라 버킷 라이브 분봉 + /api/candles 백필 병합.
-import { useEffect, useMemo, useState } from "react";
+// 종목 상세: 현재가·등락 + SSE 틱 차트 + 주문 패널.
+// 토글: 라인(실시간 틱 누적) · 분▾(1·5·10·15·30·60분봉) · 일 · 주 · 월 — 캔들은 useCandles(tf)가
+// 백필+라이브 병합까지 담당(계약: 분봉=IntradayCandle[](time=초), 일·주·월=DailyCandle[](date 문자열)).
+import { useMemo, useState } from "react";
 import type { CandlestickData, LineData, Time, UTCTimestamp } from "lightweight-charts";
-import { keyOf, type IntradayCandle, type UniverseEntry } from "@mockstock/shared";
+import { keyOf, TF_MINUTES, type ChartTimeframe, type UniverseEntry } from "@mockstock/shared";
+import { ChevronDownIcon } from "lucide-react";
 import { usePrices } from "@/lib/market/usePrices";
 import { useCandles } from "@/lib/market/useCandles";
 import { PriceChart } from "@/components/PriceChart";
 import { PriceText } from "@/components/PriceText";
 import { SymbolAvatar } from "@/components/market/symbol-avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
 import { OrderPanel } from "./order-panel";
 
 const MAX_POINTS = 300; // ponytail: 최근 N틱만 유지 — 세션 길어져도 메모리·렌더 상한 고정.
 
-type Timeframe = "line" | "1m";
+type Timeframe = "line" | ChartTimeframe;
 const CHART_HEIGHT = 360;
 
-/**
- * 백필(과거) + 라이브(진행) 분봉을 time 오름차순·유일로 병합.
- * 겹치는 분은 백필(워커가 축적한 완성 정본)을 채택 — 라이브 첫 버킷은 마운트 직후 첫 틱을 o로
- * 잡는 부분봉이라 OHLC가 부정확하다. 백필은 완성된 과거 분만 담으므로, forming·백필보다 최신인
- * 라이브 완성봉은 애초에 겹치지 않아 그대로 보존된다(=백필을 나중에 set해 충돌만 덮는다).
- */
-function mergeCandles(backfill: IntradayCandle[], live: IntradayCandle[]): IntradayCandle[] {
-  const byTime = new Map<number, IntradayCandle>();
-  for (const c of live) byTime.set(c.time, c);
-  for (const c of backfill) byTime.set(c.time, c); // 백필을 마지막에 써 충돌 분을 정본으로 덮음
-  return [...byTime.values()].sort((a, b) => a.time - b.time);
-}
+// 분▾ 드롭다운 항목 — 라벨은 TF_MINUTES(단일 소스)에서 파생(매직 라벨 산재 금지).
+type MinuteTf = keyof typeof TF_MINUTES;
+const MINUTE_TFS = Object.keys(TF_MINUTES) as MinuteTf[];
+const minuteLabel = (tf: MinuteTf) => `${TF_MINUTES[tf]}분`;
+
+// 일·주·월 버튼(캔들 daily 카테고리).
+const DAILY_TFS = [
+  { id: "day", label: "일" },
+  { id: "week", label: "주" },
+  { id: "month", label: "월" },
+] as const satisfies readonly { id: ChartTimeframe; label: string }[];
+
+/** 토글 버튼 공용 스타일 — 드롭다운 트리거도 동일 룩. */
+const tfButtonClass = (active: boolean) =>
+  cn(
+    "rounded-md px-3 py-1 text-sm font-semibold transition",
+    active
+      ? "bg-background text-foreground shadow-sm"
+      : "text-muted-foreground hover:text-foreground",
+  );
 
 /** SSE 최신 틱(ts·price)을 라인 시리즈로 누적. lightweight-charts는 시간 오름차순·유일을 요구한다. */
 function usePriceSeries(ts: number | undefined, price: number | undefined): LineData<Time>[] {
@@ -58,41 +74,24 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
   const quotes = usePrices([{ market: entry.market, symbol: entry.symbol }]);
   const quote = quotes[keyOf(entry.market, entry.symbol)];
   const series = usePriceSeries(quote?.ts, quote?.price);
-  const liveCandles = useCandles(entry.market, entry.symbol, quote?.ts, quote?.price);
 
   const [tf, setTf] = useState<Timeframe>("line");
+  const isMinute = tf !== "line" && tf in TF_MINUTES;
 
-  // 1분 토글 최초 진입 시 /api/candles 백필 1회. 비어도(day1) 라이브만으로 정상 동작.
-  const [backfill, setBackfill] = useState<IntradayCandle[]>([]);
-  const [backfillLoaded, setBackfillLoaded] = useState(false);
-  useEffect(() => {
-    if (tf !== "1m" || backfillLoaded) return;
-    let alive = true;
-    fetch(`/api/candles?market=${entry.market}&symbol=${encodeURIComponent(entry.symbol)}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: unknown) => {
-        if (alive) {
-          setBackfill(Array.isArray(data) ? (data as IntradayCandle[]) : []);
-          setBackfillLoaded(true);
-        }
-      })
-      .catch(() => alive && setBackfillLoaded(true));
-    return () => {
-      alive = false;
-    };
-  }, [tf, backfillLoaded, entry.market, entry.symbol]);
+  // 훅 규칙상 항상 호출 — 라인 모드에서는 기본 tf(1m)로 대기(계약: 요청 tf로 응답 타입 분기).
+  const chartTf: ChartTimeframe = tf === "line" ? "1m" : tf;
+  const raw = useCandles(entry.market, entry.symbol, chartTf);
 
-  // 병합 후 lightweight-charts CandlestickData(open/high/low/close, time=초)로 매핑.
+  // 계약 매핑: 분봉=time(epoch 초)→UTCTimestamp, 일·주·월=date("YYYY-MM-DD") 문자열 그대로
+  // (lightweight-charts Time은 date 문자열 허용 — epoch 변환 금지, 스펙 확정).
   const candles = useMemo<CandlestickData<Time>[]>(
     () =>
-      mergeCandles(backfill, liveCandles).map((c) => ({
-        time: c.time as UTCTimestamp,
-        open: c.o,
-        high: c.h,
-        low: c.l,
-        close: c.c,
-      })),
-    [backfill, liveCandles],
+      raw.map((c) =>
+        "date" in c
+          ? { time: c.date as Time, open: c.o, high: c.h, low: c.l, close: c.c }
+          : { time: c.time as UTCTimestamp, open: c.o, high: c.h, low: c.l, close: c.c },
+      ),
+    [raw],
   );
 
   // D12f: seedPrice 폴백 제거 — quote 없으면 대시 표기(baseline 시드가 정상 상태를 보장).
@@ -130,26 +129,45 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <div className="rounded-2xl border bg-card p-4">
           <div className="mb-3 inline-flex rounded-lg bg-muted p-1">
-            {(["line", "1m"] as Timeframe[]).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setTf(t)}
-                className={cn(
-                  "rounded-md px-3 py-1 text-sm font-semibold transition",
-                  tf === t
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
+            <button type="button" onClick={() => setTf("line")} className={tfButtonClass(tf === "line")}>
+              라인
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(tfButtonClass(isMinute), "inline-flex items-center gap-0.5")}
               >
-                {t === "line" ? "라인" : "1분"}
+                {isMinute ? minuteLabel(tf as MinuteTf) : "분"}
+                <ChevronDownIcon className="size-3.5" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {MINUTE_TFS.map((m) => (
+                  <DropdownMenuItem key={m} onSelect={() => setTf(m)}>
+                    {minuteLabel(m)}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {DAILY_TFS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTf(t.id)}
+                className={tfButtonClass(tf === t.id)}
+              >
+                {t.label}
               </button>
             ))}
           </div>
 
           {tf === "line" ? (
             series.length > 0 ? (
-              <PriceChart symbol={entry.symbol} type="line" data={series} height={CHART_HEIGHT} />
+              <PriceChart
+                symbol={entry.symbol}
+                type="line"
+                data={series}
+                currency={entry.currency}
+                height={CHART_HEIGHT}
+              />
             ) : (
               <div
                 className="flex items-center justify-center text-sm text-muted-foreground"
@@ -160,10 +178,11 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
             )
           ) : candles.length > 0 ? (
             <PriceChart
-              key="1m"
               symbol={entry.symbol}
               type="candlestick"
               data={candles}
+              timeframe={tf}
+              currency={entry.currency}
               height={CHART_HEIGHT}
             />
           ) : (
@@ -171,7 +190,7 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
               className="flex items-center justify-center text-sm text-muted-foreground"
               style={{ height: CHART_HEIGHT }}
             >
-              실시간 분봉을 집계 중입니다…
+              데이터 준비 중
             </div>
           )}
         </div>

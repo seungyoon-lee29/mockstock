@@ -15,7 +15,8 @@ import { HOLIDAYS, OVERRIDES } from "./data/marketHolidays";
 export type MarketSession = "open" | "closed";
 
 // 정규장 시각(현지 tz 기준, 24h). 세션 경계는 [open, close) — 마감 시각은 closed.
-const REGULAR_SESSION: Record<Market, { tz: string; open: string; close: string }> = {
+// export: 세션 경계·tz의 단일 소스(하드코딩 금지) — worker 백필/일봉 동기화, web candleServe가 소비.
+export const REGULAR_SESSION: Record<Market, { tz: string; open: string; close: string }> = {
   KR: { tz: "Asia/Seoul", open: "09:00", close: "15:30" },
   US: { tz: "America/New_York", open: "09:30", close: "16:00" },
 };
