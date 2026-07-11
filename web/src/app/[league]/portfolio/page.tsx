@@ -239,7 +239,7 @@ function PortfolioView({ league, userId }: { league: string; userId: string }) {
                         <TableCell
                           className={cn("text-right tabular-nums", changeClass(pnl))}
                         >
-                          {`${formatSignedPrice(pnl, currency)}${pnlPct != null ? ` (${formatPct(pnlPct)})` : ""}`}
+                          {`${formatSignedPrice(pnl, posCurrency)}${pnlPct != null ? ` (${formatPct(pnlPct)})` : ""}`}
                         </TableCell>
                       </TableRow>
                     );

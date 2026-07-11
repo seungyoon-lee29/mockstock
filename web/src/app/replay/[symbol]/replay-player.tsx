@@ -8,6 +8,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 import type { CandlestickData, Time } from "lightweight-charts";
+import { SEED_MONEY, type Currency, type Market } from "@mockstock/shared";
 import { authClient } from "@/lib/auth-client";
 import { PriceChart } from "@/components/PriceChart";
 import { PriceText } from "@/components/PriceText";
@@ -130,6 +131,12 @@ function ReplaySession({
   manifest: ReplayManifest;
   candles: Candle[];
 }) {
+  // 리플레이 시드는 시나리오 자체 단위(PRD §5.3) — 종목 시장의 통화 하나로 통일.
+  const market: Market =
+    Array.isArray(manifest.symbols.KR) && manifest.symbols.KR.includes(symbol) ? "KR" : "US";
+  const currency: Currency = market === "KR" ? "KRW" : "USD";
+  const seed = SEED_MONEY[market];
+
   const playStart = useMemo(
     () => firstIndexOnOrAfter(candles, manifest.playPeriod.start),
     [candles, manifest],
@@ -140,8 +147,8 @@ function ReplaySession({
   );
 
   const [cursor, setCursor] = useState(playStart);
-  const [account, setAccount] = useState<ReplayAccount>(() => initAccount());
-  const [curve, setCurve] = useState<number[]>(() => [equityOf(initAccount(), candles[playStart].c)]);
+  const [account, setAccount] = useState<ReplayAccount>(() => initAccount(seed));
+  const [curve, setCurve] = useState<number[]>(() => [equityOf(initAccount(seed), candles[playStart].c)]);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState<number>(REPLAY_DEFAULT_SPEED);
   const [timeframe, setTimeframe] = useState<Timeframe>("day");
@@ -174,7 +181,7 @@ function ReplaySession({
   const price = candles[cursor].c;
   const prevClose = candles[cursor - 1]?.c ?? candles[cursor].o;
   const equity = equityOf(account, price);
-  const rtnPct = returnPct(equity);
+  const rtnPct = returnPct(equity, seed);
 
   // 하루 전진: 다음 캔들 종가로 자산곡선 append. playEnd 도달 시 완주.
   const tick = useCallback(() => {
@@ -239,8 +246,8 @@ function ReplaySession({
 
   function reset() {
     setCursor(playStart);
-    setAccount(initAccount());
-    setCurve([equityOf(initAccount(), candles[playStart].c)]);
+    setAccount(initAccount(seed));
+    setCurve([equityOf(initAccount(seed), candles[playStart].c)]);
     setFinished(false);
     setRevealTail(false);
     setSaveState("idle");
@@ -284,8 +291,8 @@ function ReplaySession({
           <h1 className="text-2xl font-extrabold tracking-tight">{symbol}</h1>
         </div>
         <div className="text-right">
-          <div className="text-xl font-bold tabular-nums">{formatPrice(price, "USD")}</div>
-          <PriceText change={price - prevClose} pct={((price - prevClose) / prevClose) * 100} currency="USD" className="text-sm" />
+          <div className="text-xl font-bold tabular-nums">{formatPrice(price, currency)}</div>
+          <PriceText change={price - prevClose} pct={((price - prevClose) / prevClose) * 100} currency={currency} className="text-sm" />
         </div>
       </div>
 
@@ -365,9 +372,9 @@ function ReplaySession({
                   <CardTitle className="text-sm text-muted-foreground">내 포트폴리오</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1.5 text-sm">
-                  <Row label="현금" value={formatPrice(account.cash, "KRW")} />
-                  <Row label="평가금액" value={formatPrice(account.qty * price, "KRW")} />
-                  <Row label="총자산" value={formatPrice(equity, "KRW")} strong />
+                  <Row label="현금" value={formatPrice(account.cash, currency)} />
+                  <Row label="평가금액" value={formatPrice(account.qty * price, currency)} />
+                  <Row label="총자산" value={formatPrice(equity, currency)} strong />
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">수익률</span>
                     <PriceText change={rtnPct} className="font-semibold">
@@ -376,7 +383,7 @@ function ReplaySession({
                   </div>
                   {holding && (
                     <div className="mt-1 flex justify-between border-t pt-1.5 text-xs">
-                      <span className="text-muted-foreground">평단 {formatPrice(avgCost, "USD")}</span>
+                      <span className="text-muted-foreground">평단 {formatPrice(avgCost, currency)}</span>
                       <PriceText change={unrealizedPct}>{formatPct(unrealizedPct)}</PriceText>
                     </div>
                   )}
