@@ -15,6 +15,8 @@ import {
   formatSignedPrice,
 } from "@/lib/market/format";
 import type { PortfolioPosition, PortfolioResponse } from "@/lib/portfolio";
+import { InvestmentProfileCard } from "@/components/profile/investment-profile-card";
+import { SymbolAvatar } from "@/components/market/symbol-avatar";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -76,7 +78,7 @@ export default function LeaguePortfolioPage({ params }: { params: Promise<{ leag
       ) : isGuest ? (
         <LoginPrompt league={league} />
       ) : (
-        <PortfolioView league={league} />
+        <PortfolioView league={league} userId={session.user.id} />
       )}
     </main>
   );
@@ -105,7 +107,7 @@ function LoginPrompt({ league }: { league: string }) {
   );
 }
 
-function PortfolioView({ league }: { league: string }) {
+function PortfolioView({ league, userId }: { league: string; userId: string }) {
   const queryClient = useQueryClient();
   const [cancelingId, setCancelingId] = useState<string | null>(null);
   // ponytail: league가 바뀌면 다른 캐시 키 사용 → 교차 오염 방지
@@ -160,12 +162,11 @@ function PortfolioView({ league }: { league: string }) {
   const reserved = Number(data.reserved);
   const realized = Number(data.realizedPnl);
 
-  let holdingsValue = 0;
   const rows = positions.map((p) => {
     const v = valuePosition(p, quotes[keyOf(p.market, p.symbol)], currency);
-    holdingsValue += v.valuation;
     return { p, ...v };
   });
+  const holdingsValue = rows.reduce((sum, r) => sum + r.valuation, 0);
   const total = cash + reserved + holdingsValue;
 
   return (
@@ -216,9 +217,14 @@ function PortfolioView({ league }: { league: string }) {
                     return (
                       <TableRow key={keyOf(p.market, p.symbol)}>
                         <TableCell>
-                          <div className="font-medium">{name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {p.symbol} · {p.market === "KR" ? "KOSPI" : "US"}
+                          <div className="flex items-center gap-3">
+                            <SymbolAvatar market={p.market} symbol={p.symbol} name={name} />
+                            <div>
+                              <div className="font-medium">{name}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {p.symbol} · {p.market === "KR" ? "KOSPI" : "US"}
+                              </div>
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
@@ -272,8 +278,13 @@ function PortfolioView({ league }: { league: string }) {
                     return (
                       <TableRow key={o.id}>
                         <TableCell>
-                          <div className="font-medium">{name}</div>
-                          <div className="text-xs text-muted-foreground">{o.symbol}</div>
+                          <div className="flex items-center gap-3">
+                            <SymbolAvatar market={o.market} symbol={o.symbol} name={name} />
+                            <div>
+                              <div className="font-medium">{name}</div>
+                              <div className="text-xs text-muted-foreground">{o.symbol}</div>
+                            </div>
+                          </div>
                         </TableCell>
                         <TableCell>
                           <span className={o.side === "buy" ? "text-up" : "text-down"}>
@@ -309,6 +320,9 @@ function PortfolioView({ league }: { league: string }) {
           </CardContent>
         </Card>
       </section>
+
+      {/* AI 투자 성향(§D8) — 서버가 통계로 lazy 생성, 키 없으면 규칙 기반 간이 분석 */}
+      <InvestmentProfileCard league={league} userId={userId} />
     </div>
   );
 }

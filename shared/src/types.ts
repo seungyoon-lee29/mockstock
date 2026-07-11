@@ -9,6 +9,8 @@ export interface SymbolInfo {
   symbol: string; // "AAPL" | "005930"
   name: string; // "Apple" | "삼성전자"
   currency: Currency;
+  /** 검색용 별칭(D5) — US 종목 한국어명("애플" 등). searchUniverse가 부분일치 매칭. */
+  aliases?: string[];
 }
 
 /** 워커/피드가 보내는 원시 체결 틱 */

@@ -1,5 +1,5 @@
 // 워커 엔트리 — 시장별 피드 → 시세북 → HTTP/SSE. mock 기본이라 키 없이 구동.
-import type { Market } from "@mockstock/shared";
+import type { Market, Tick } from "@mockstock/shared";
 import { config, assertProductionConfig } from "./config";
 import { PriceBook } from "./priceBook";
 import { CandleAggregator } from "./aggregator";
@@ -8,13 +8,25 @@ import { createHttpServer } from "./sse";
 import { startMatching } from "./matching";
 import { startCron } from "./cron";
 import { startBots } from "./bots";
-import { closeDb } from "./db";
+import { getDb, closeDb } from "./db";
+import { seedInstruments, tapTick, startLastPriceFlush, flushLastPrices } from "./instruments";
 
 assertProductionConfig(); // 프로덕션 fail-closed 부팅 게이트 (worker.md) — 시크릿/CORS 없으면 기동 거부
+
+// D12a: 부팅 멱등 시드 — instruments 로우 부재로 시즌 평가가 0원 되는 P1 차단.
+// DB 없으면(키리스 mock 로컬) 조용히 스킵. 부팅 1회 버스트라 B13(유휴 미접촉)과 양립.
+const bootDb = getDb();
+if (bootDb) {
+  seedInstruments(bootDb)
+    .then((n) => console.log(`[instruments] 부팅 시드 완료 — 유니버스 ${n}종목 (멱등)`))
+    .catch((e) => console.error("[instruments] 부팅 시드 실패", e));
+}
 
 const book = new PriceBook();
 const aggregator = new CandleAggregator(); // P3-① 분봉 수집·저장(장중 실틱만 영속화)
 aggregator.start();
+const lastPriceBuf = new Map<string, Tick>(); // D12b: 실피드 lastPrice 영속화 버퍼(mock 제외)
+const stopLastPriceFlush = startLastPriceFlush(lastPriceBuf);
 const feeds: Feed[] = [];
 
 for (const market of ["KR", "US"] as Market[]) {
@@ -23,6 +35,7 @@ for (const market of ["KR", "US"] as Market[]) {
   feed.start((tick) => {
     book.set(tick);
     aggregator.add(tick);
+    tapTick(lastPriceBuf, tick);
   });
   feeds.push(feed);
   console.log(`[feed] ${market} = ${kind}`);
@@ -40,6 +53,8 @@ server.listen(config.port, () => {
 async function shutdown() {
   console.log("[worker] shutting down");
   for (const f of feeds) f.stop();
+  stopLastPriceFlush();
+  await flushLastPrices(lastPriceBuf); // 마지막 lastPrice 배치 — 장중 배포 시 최신가 유실 방지(마감이면 no-op)
   await aggregator.stop(); // 완성 분봉 flush 완료까지 대기 — 배포(SIGTERM) 시 유실 방지
   server.close(async () => {
     await closeDb();

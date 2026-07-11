@@ -2,34 +2,48 @@
 
 // 앱 전역 상단 네비게이션. 루트 layout.tsx에서 렌더 → 모든 페이지 공용 셸.
 // 링크 라벨은 한국어, 포인트색은 --color-brand(시안) 토큰 경유.
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { SessionWidget } from "./session-widget";
 
-// 리그 스코프 링크는 현재 리그(쿠키/경로) prefix. 리플레이·검색은 리그 무관 전역.
+// 리그 스코프 링크는 현재 리그(쿠키/경로) prefix. 리플레이는 리그 무관 전역.
+// 검색은 탐색(discover)에 흡수 — 별도 네비 항목 없음.
 const LEAGUE_NAV = [
+  { seg: "discover", label: "탐색" },
   { seg: "leaderboard", label: "리더보드" },
   { seg: "portfolio", label: "포트폴리오" },
-  { seg: "discover", label: "발견" },
 ] as const;
-const GLOBAL_NAV = [
-  { href: "/replay", label: "리플레이" },
-  { href: "/search", label: "검색" },
-] as const;
+const GLOBAL_NAV = [{ href: "/replay", label: "리플레이" }] as const;
 const LEAGUES = [
   { id: "kr", label: "국내" },
   { id: "us", label: "해외" },
 ] as const;
 const LEAGUE_COOKIE = "league"; // 기본 KR
 
-/** 경로에서 현재 리그 파싱. /kr/… 또는 /us/… 이면 그 리그, 아니면 쿠키(기본 kr). */
-function leagueFromPath(pathname: string): string {
+/** 경로에서 현재 리그 파싱. /kr/… 또는 /us/… 이면 그 리그, 아니면 null(쿠키 폴백은 호출부). */
+function leagueFromPath(pathname: string): string | null {
   const seg = pathname.split("/")[1];
   if (seg === "kr" || seg === "us") return seg;
-  // 클라이언트에서 쿠키 읽기 (SSR guard: document 없을 수 있음)
-  if (typeof document === "undefined") return "kr";
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${LEAGUE_COOKIE}=([^;]+)`));
+  return null;
+}
+
+// 리그 쿠키 미니 스토어 — useSyncExternalStore 계약(구독 + 스냅샷).
+// 서버 스냅샷은 항상 "kr" → SSR과 hydration 렌더가 일치, hydration 후 실제 쿠키 값으로 전환.
+let cookieListeners: Array<() => void> = [];
+
+function subscribeLeagueCookie(onChange: () => void): () => void {
+  cookieListeners.push(onChange);
+  return () => {
+    cookieListeners = cookieListeners.filter((l) => l !== onChange);
+  };
+}
+
+function readLeagueCookie(): string {
+  const match = document.cookie.match(
+    new RegExp(`(?:^|;\\s*)${LEAGUE_COOKIE}=([^;]+)`),
+  );
   return match?.[1] ?? "kr";
 }
 
@@ -44,14 +58,27 @@ function isActive(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname.startsWith(href);
 }
 
+/** 리그 쿠키 저장 + 구독자 통지. 컴포넌트 밖 헬퍼 — 렌더 스코프에서 전역(document) 변이 금지 규칙 준수. */
+function setLeagueCookie(id: string) {
+  document.cookie = `${LEAGUE_COOKIE}=${id}; path=/`;
+  for (const l of cookieListeners) l();
+}
+
 export function SiteHeader() {
   const pathname = usePathname();
   const router = useRouter();
-  const league = leagueFromPath(pathname);
+  // 쿠키는 SSR에서 못 읽으므로 서버 스냅샷 "kr"로 hydration을 일치시키고,
+  // hydration 후 useSyncExternalStore가 실제 쿠키 값으로 전환(mismatch 방지).
+  const cookieLeague = useSyncExternalStore(
+    subscribeLeagueCookie,
+    readLeagueCookie,
+    () => "kr",
+  );
+  const league = leagueFromPath(pathname) ?? cookieLeague;
   const scopeSeg = scopeSegFromPath(pathname);
 
   function switchLeague(id: string) {
-    document.cookie = `${LEAGUE_COOKIE}=${id}; path=/`;
+    setLeagueCookie(id);
     // 리그 스코프 세그먼트 유지. 밖에서 클릭하면 discover로.
     const seg = scopeSeg ?? "discover";
     router.push(`/${id}/${seg}`);

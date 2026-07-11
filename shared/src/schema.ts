@@ -10,6 +10,7 @@ import {
   integer,
   boolean,
   numeric,
+  jsonb,
   timestamp,
   date,
   primaryKey,
@@ -120,6 +121,10 @@ export const orders = pgTable(
   (t) => [
     // 접수 중복 차단은 (유저, 시즌) 스코프 — 리그 간 같은 키 충돌 차단(season_id가 market 인코딩, BLOCKER).
     uniqueIndex("orders_user_season_idempotency_uq").on(t.userId, t.seasonId, t.idempotencyKey),
+    // D4 인기 순위(당일 체결 건수, 리그 스코프) 집계용 — filled만 대상이라 partial index.
+    index("orders_season_filled_symbol_idx")
+      .on(t.seasonId, t.filledAt, t.symbol)
+      .where(sql`${t.status} = 'filled'`),
   ],
 );
 
@@ -206,6 +211,42 @@ export const minuteCandles = pgTable(
     v: numeric("v", { precision: 20, scale: 0 }).notNull(),
   },
   (t) => [primaryKey({ columns: [t.market, t.symbol, t.ts] })],
+);
+
+/**
+ * AI 투자 성향 요약 캐시 (§D8, 0005). 시즌×유저당 1로우 — GET lazy 생성.
+ * status: 'pending'(생성 중 placeholder·lease) → 'ok' | 'insufficient'(체결 부족) | 'failed'(LLM 오류).
+ * pending placeholder 단계에서는 summary/traits/model/input_hash 전부 NULL(계약).
+ * - generation_started_at: lease 시각 — 만료(PROFILE_LEASE_MS) 후 다른 요청이 takeover.
+ * - retry_after: insufficient/failed 재시도 허용 시각(즉시 재시도 폭주 차단).
+ * - input_hash: 통계 직렬화 해시 — 불일치 시에만 재생성(가드 ③).
+ * - model: LLM 생성 시 모델 id, 규칙 폴백이면 NULL → aiGenerated 파생.
+ */
+export const investmentProfiles = pgTable(
+  "investment_profiles",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    seasonId: text("season_id")
+      .notNull()
+      .references(() => seasons.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["pending", "ok", "insufficient", "failed"] })
+      .notNull()
+      .default("pending"),
+    summary: text("summary"),
+    traits: jsonb("traits").$type<string[]>(),
+    model: text("model"),
+    inputHash: text("input_hash"),
+    generationStartedAt: timestamp("generation_started_at", { withTimezone: true }),
+    retryAfter: timestamp("retry_after", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.seasonId] })],
 );
 
 // ── Better Auth adapter 테이블 (T03) ──────────────────────────────────────────

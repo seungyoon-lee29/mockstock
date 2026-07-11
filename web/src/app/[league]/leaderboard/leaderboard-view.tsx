@@ -4,6 +4,7 @@
 // 전원 평가액을 로컬 재계산해 순위를 매긴다(§9). 순위/닉네임/수익률(등락색)/수익금 + BOT 배지,
 // 내 순위 하이라이트, 시즌 카운트다운, 주기 폴링(react-query refetchInterval) + 수동 새로고침.
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { keyOf, type Market } from "@mockstock/shared";
@@ -131,41 +132,41 @@ export function LeaderboardView({ league }: { league: string }) {
               {ranked.map((row) => {
                 const isMe = row.userId === myId;
                 return (
-                  <li
-                    key={row.userId}
-                    className={cn(
-                      "flex items-center gap-3 px-4 py-3",
-                      isMe && "bg-brand/10",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "w-7 shrink-0 text-center text-sm font-bold tabular-nums",
-                        row.rank <= 3 ? "text-foreground" : "text-muted-foreground",
-                      )}
+                  <li key={row.userId} className={cn(isMe && "bg-brand/10")}>
+                    {/* 행 전체 클릭 → 참가자 공개 포트폴리오 */}
+                    <Link
+                      href={`/${league}/u/${row.userId}`}
+                      className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/50"
                     >
-                      {row.rank}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate font-medium">
-                          {row.name?.trim() || "게스트"}
-                        </span>
-                        {row.isBot && <Badge variant="secondary">BOT</Badge>}
-                        {isMe && (
-                          <Badge className="bg-brand text-brand-foreground">나</Badge>
+                      <span
+                        className={cn(
+                          "w-7 shrink-0 text-center text-sm font-bold tabular-nums",
+                          row.rank <= 3 ? "text-foreground" : "text-muted-foreground",
                         )}
+                      >
+                        {row.rank}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="truncate font-medium">
+                            {row.name?.trim() || "게스트"}
+                          </span>
+                          {row.isBot && <Badge variant="secondary">BOT</Badge>}
+                          {isMe && (
+                            <Badge className="bg-brand text-brand-foreground">나</Badge>
+                          )}
+                        </div>
+                        <PriceText change={row.returnAbs} className="text-xs">
+                          {formatSignedPrice(row.returnAbs, league === "us" ? "USD" : "KRW")}
+                        </PriceText>
                       </div>
-                      <PriceText change={row.returnAbs} className="text-xs">
-                        {formatSignedPrice(row.returnAbs, league === "us" ? "USD" : "KRW")}
+                      <PriceText
+                        change={row.returnPct}
+                        className="shrink-0 text-right text-base font-semibold"
+                      >
+                        {formatPct(row.returnPct)}
                       </PriceText>
-                    </div>
-                    <PriceText
-                      change={row.returnPct}
-                      className="shrink-0 text-right text-base font-semibold"
-                    >
-                      {formatPct(row.returnPct)}
-                    </PriceText>
+                    </Link>
                   </li>
                 );
               })}

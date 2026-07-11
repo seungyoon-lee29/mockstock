@@ -9,6 +9,7 @@ import { usePrices } from "@/lib/market/usePrices";
 import { useCandles } from "@/lib/market/useCandles";
 import { PriceChart } from "@/components/PriceChart";
 import { PriceText } from "@/components/PriceText";
+import { SymbolAvatar } from "@/components/market/symbol-avatar";
 import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
 import { OrderPanel } from "./order-panel";
@@ -34,20 +35,22 @@ function mergeCandles(backfill: IntradayCandle[], live: IntradayCandle[]): Intra
 /** SSE 최신 틱(ts·price)을 라인 시리즈로 누적. lightweight-charts는 시간 오름차순·유일을 요구한다. */
 function usePriceSeries(ts: number | undefined, price: number | undefined): LineData<Time>[] {
   const [series, setSeries] = useState<LineData<Time>[]>([]);
-  useEffect(() => {
-    if (ts == null || price == null) return;
+  // effect 내 setState(lint set-state-in-effect) 대신 렌더 중 상태 조정 패턴
+  // (react.dev "adjusting state when a prop changes") — 직전 반영 틱과 다를 때만 누적.
+  const [applied, setApplied] = useState<{ ts: number; price: number } | null>(null);
+  if (ts != null && price != null && (applied?.ts !== ts || applied?.price !== price)) {
+    setApplied({ ts, price });
     const time = Math.floor(ts / 1000) as UTCTimestamp; // ms→s (UTCTimestamp는 초 단위)
-    setSeries((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && (last.time as number) === time) {
-        // 같은 초 내 갱신 → 마지막 점 값만 교체(유일 시간 유지).
-        return [...prev.slice(0, -1), { time, value: price }];
-      }
-      if (last && (last.time as number) > time) return prev; // 역행 틱 무시.
-      const next = [...prev, { time, value: price }];
-      return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
-    });
-  }, [ts, price]);
+    const last = series[series.length - 1];
+    if (last && (last.time as number) === time) {
+      // 같은 초 내 갱신 → 마지막 점 값만 교체(유일 시간 유지).
+      setSeries([...series.slice(0, -1), { time, value: price }]);
+    } else if (!last || (last.time as number) < time) {
+      // 역행 틱(last.time > time)은 무시.
+      const next = [...series, { time, value: price }];
+      setSeries(next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next);
+    }
+  }
   return series;
 }
 
@@ -92,27 +95,35 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
     [backfill, liveCandles],
   );
 
-  const price = quote?.price ?? entry.seedPrice;
-  const change = quote?.change ?? 0;
-  const pct = quote?.changePct ?? 0;
+  // D12f: seedPrice 폴백 제거 — quote 없으면 대시 표기(baseline 시드가 정상 상태를 보장).
+  const price = quote?.price;
 
   return (
     <main className="mx-auto w-full max-w-5xl px-4 py-6">
       <div className="mb-5 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h1 className="truncate text-2xl font-bold tracking-tight">{entry.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {entry.symbol} · {entry.market === "KR" ? "KOSPI" : "US"}
-          </p>
+        <div className="flex min-w-0 items-center gap-3">
+          <SymbolAvatar market={entry.market} symbol={entry.symbol} name={entry.name} size="lg" />
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-bold tracking-tight">{entry.name}</h1>
+            <p className="text-sm text-muted-foreground">
+              {entry.symbol} · {entry.market === "KR" ? "KOSPI" : "US"}
+            </p>
+          </div>
         </div>
         <div className="shrink-0 text-right tabular-nums">
-          <div className="text-2xl font-bold">{formatPrice(price, entry.currency)}</div>
-          <PriceText
-            change={change}
-            pct={pct}
-            currency={entry.currency}
-            className="text-sm font-medium"
-          />
+          <div className="text-2xl font-bold">
+            {price != null ? formatPrice(price, entry.currency) : "—"}
+          </div>
+          {quote ? (
+            <PriceText
+              change={quote.change}
+              pct={quote.changePct}
+              currency={entry.currency}
+              className="text-sm font-medium"
+            />
+          ) : (
+            <div className="text-sm font-medium text-muted-foreground">시세 대기 중</div>
+          )}
         </div>
       </div>
 

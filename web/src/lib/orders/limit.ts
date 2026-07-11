@@ -5,11 +5,12 @@
 //  · 접수(매도): 예약 컬럼 없이 `보유 qty − 해당 종목 open 매도 qty 합 ≥ 주문 qty` 서브쿼리 검증.
 //  · 취소: status='open' CAS + RETURNING reserved → 매수면 환불(단일 트랜잭션, db.md).
 import { and, eq, sql } from "drizzle-orm";
-import type { PgDatabase } from "drizzle-orm/pg-core";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { accounts, orders, positions, seasons } from "@mockstock/shared/schema";
 import { POSITION_LIMIT_PCT, type Market, type Side } from "@mockstock/shared";
 
-type Db = PgDatabase<any, any, any>;
+// 드라이버 불문 Postgres 핸들 — neon-serverless(web)·pglite(테스트) 둘 다 이 상위 타입에 대입된다.
+type Db = PgDatabase<PgQueryResultHKT, Record<string, unknown>>;
 
 // numeric(_,2) 문자열 ↔ 센트 정수 — fillOrder·seasons와 동일 규약(라운딩 누수 없는 합산).
 // ponytail: 이 유틸은 shared 3파일에서 이미 각자 로컬 보유하는 확립된 패턴 — 지역 복제 유지.

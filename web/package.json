@@ -7,9 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test src/lib/*.test.ts src/lib/orders/*.test.ts"
+    "test": "tsx --test src/lib/*.test.ts src/lib/*/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.111.0",
     "@base-ui/react": "^1.6.0",
     "@mockstock/shared": "*",
     "@neondatabase/serverless": "^1.1.0",

@@ -22,6 +22,24 @@ export function positionLimit(seedMoney: number): number {
  */
 export const SNAPSHOT_MAX_AGE_MS = 30_000;
 
+// ── AI 투자 성향 요약 (§D8) — 남용 가드·lease·LLM 정책 값. web 프로필 파이프라인 전용. ──
+
+/** 가드 ②: 이 체결 건수 미만이면 LLM 없이 status='insufficient'. */
+export const PROFILE_MIN_FILLED_ORDERS = 5;
+/** lease 만료(ms) — pending placeholder의 generation_started_at이 이보다 오래되면 takeover 허용. */
+export const PROFILE_LEASE_MS = 2 * 60_000;
+/** insufficient/failed 후 재시도 허용까지의 간격(ms) — retry_after 계산(즉시 재시도 폭주 차단). */
+export const PROFILE_RETRY_AFTER_MS = 5 * 60_000;
+/** 가드 ③: ok 프로필 재생성 최소 간격(ms) — input_hash 불일치여도 이 간격 전엔 유지. */
+export const PROFILE_REGEN_MIN_INTERVAL_MS = 60 * 60_000;
+/** 가드 ④: 전역 일일 LLM 생성 상한(KST 기준, model 비NULL 로우 수). 초과 시 규칙 폴백. */
+export const PROFILE_DAILY_GENERATION_CAP = 200;
+/** LLM 호출 타임아웃(ms)·재시도 횟수 — 라우트 maxDuration 산정의 근거. */
+export const PROFILE_LLM_TIMEOUT_MS = 15_000;
+export const PROFILE_LLM_MAX_RETRIES = 1;
+/** env ANTHROPIC_MODEL 미설정 시 기본 모델. */
+export const PROFILE_DEFAULT_MODEL = "claude-haiku-4-5";
+
 // ── 시즌 수명주기 상수 (§4.1·§7.6) — 주간 시즌 경계. 단축 시즌은 env로 파라미터화. ──
 
 /** 주간 시즌 시작 요일(월요일). 0=일 … 6=토 (KST 기준). */

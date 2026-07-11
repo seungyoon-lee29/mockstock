@@ -59,6 +59,20 @@ export interface PortfolioResponse {
   openOrders: PortfolioOrder[];
 }
 
+/** 참가자 공개 포트폴리오 (GET /api/users/[userId]/portfolio) — 리더보드 행 클릭 상세.
+ * openOrders는 포함하지 않는다(미체결 주문은 비공개 전략). reserved는 리더보드가 이미
+ * 참가자별로 공개하는 집계라 포함 — 총 평가액이 리더보드 순위 계산과 일치해야 한다. */
+export interface ParticipantPortfolio {
+  user: { name: string | null; isBot: boolean };
+  /** false = 해당 리그 활성 시즌에 계좌 없음(참가 이력 없음). positions는 빈 배열. */
+  hasAccount: boolean;
+  season: PortfolioResponse["season"];
+  cash: string;
+  reserved: string;
+  realizedPnl: string;
+  positions: PortfolioPosition[];
+}
+
 /**
  * DB 로우들을 포트폴리오 응답 셰이프로 조립한다.
  * - cash 없음(계좌 미조인) → 시드머니 폴백: lazy upsert(§5.3) 전에도 시드 현금을 노출한다.

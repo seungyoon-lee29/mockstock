@@ -150,10 +150,14 @@ function ReplaySession({
   const [saveState, setSaveState] = useState<"idle" | "saved" | "guest">("idle");
 
   const sessionIdRef = useRef<string | null>(null);
+  // setInterval 틱(tick 콜백)이 읽는 최신 스냅샷. 렌더 중 ref 쓰기는 금지(react-hooks/refs)라
+  // 커밋 후 effect에서 동기화 — 타이머 콜백은 커밋 이후에만 돌므로 동작 동일.
   const accountRef = useRef(account);
-  accountRef.current = account;
   const cursorRef = useRef(cursor);
-  cursorRef.current = cursor;
+  useEffect(() => {
+    accountRef.current = account;
+    cursorRef.current = cursor;
+  }, [account, cursor]);
 
   // 세션 시작 insert(완주율 분모). 게스트·실패는 id=null → 완주 시 로그인 CTA. best-effort.
   useEffect(() => {

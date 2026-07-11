@@ -7,6 +7,7 @@ import type { Market } from "@mockstock/shared";
 import type { PriceBook } from "./priceBook";
 import { config } from "./config";
 import { syncOrder, type SyncOrderInput } from "./matching";
+import { kisStats } from "./feeds/kis";
 
 function parseSymbols(param: string | null): { market: Market; symbol: string }[] {
   if (!param) return [];
@@ -43,6 +44,7 @@ export function createHttpServer(book: PriceBook): http.Server {
             KR: lastTs.KR ? now - lastTs.KR : null,
             US: lastTs.US ? now - lastTs.US : null,
           },
+          kisSubscribeRejects: kisStats.subscribeRejects, // R4: KIS 41한도 초과 실측
         }),
       );
       return;

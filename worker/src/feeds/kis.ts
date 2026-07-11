@@ -20,6 +20,9 @@ const APPROVAL_TTL_MS = 24 * 60 * 60 * 1_000; // approval_key 24h 캐시(B6) —
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 60_000;
 
+/** KIS 구독 제어응답 거절 누적 카운트 — /health 노출(R4: 41한도 실측용). 프로세스 수명 카운터. */
+export const kisStats = { subscribeRejects: 0 };
+
 export class KisFeed implements Feed {
   readonly market: Market = "KR";
   private readonly symbols: string[];
@@ -121,6 +124,7 @@ export class KisFeed implements Feed {
       return;
     }
     if (msg.body?.rt_cd && msg.body.rt_cd !== "0") {
+      kisStats.subscribeRejects += 1;
       console.warn(`[kis] 구독 제어응답 오류: ${msg.body.msg1 ?? "unknown"}`);
     }
   }

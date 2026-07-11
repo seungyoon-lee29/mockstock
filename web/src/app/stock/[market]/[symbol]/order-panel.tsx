@@ -20,7 +20,8 @@ type Feedback = { ok: boolean; text: string } | null;
 // 응답 파싱 실패·네트워크 오류 등 서버 문구가 없을 때만 쓰는 폴백.
 const NETWORK_ERROR = "요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
-export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: number }) {
+// price 미도착(quote 없음) 시 undefined — 예상 금액은 "-", 체결가는 어차피 서버(워커 스냅샷)가 정한다.
+export function OrderPanel({ entry, price }: { entry: UniverseEntry; price?: number }) {
   const { data: session, isPending } = authClient.useSession();
   const pathname = usePathname(); // 로그인 후 이 종목으로 복귀시킬 callbackURL
   const [tab, setTab] = useState<OrderTab>("market");
@@ -35,7 +36,7 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
 
   const qtyNum = Number(qty);
   const limitNum = Number(limit);
-  const estUnit = tab === "limit" && limitNum > 0 ? limitNum : price;
+  const estUnit = tab === "limit" && limitNum > 0 ? limitNum : (price ?? 0);
   const estTotal = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum * estUnit : 0;
 
   async function submit() {
@@ -178,7 +179,7 @@ export function OrderPanel({ entry, price }: { entry: UniverseEntry; price: numb
             min={0}
             step={entry.currency === "USD" ? "0.01" : "1"}
             inputMode="decimal"
-            placeholder={String(price)}
+            placeholder={price != null ? String(price) : "0"}
             value={limit}
             onChange={(e) => setLimit(e.target.value)}
           />

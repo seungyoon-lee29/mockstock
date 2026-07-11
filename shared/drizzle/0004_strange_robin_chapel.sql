@@ -1,0 +1,1 @@
+CREATE INDEX "orders_season_filled_symbol_idx" ON "orders" USING btree ("season_id","filled_at","symbol") WHERE "orders"."status" = 'filled';

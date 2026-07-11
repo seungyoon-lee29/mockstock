@@ -1,15 +1,9 @@
-import type { Metadata } from "next";
-import { SearchView } from "./search-view";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = {
-  title: "검색 — 모의주식",
-  description: "종목명 또는 티커로 유니버스 종목을 검색하세요.",
-};
-
-export default function SearchPage() {
-  return (
-    <main className="flex-1">
-      <SearchView />
-    </main>
-  );
+// 검색은 탐색(/[league]/discover)에 흡수(D3) — 구 /search 진입은 리그 쿠키(기본 kr)의
+// 탐색으로 보낸다. 리그 결정은 루트 page.tsx와 동일 관행(쿠키 "league", 기본 kr).
+export default async function SearchPage() {
+  const league = (await cookies()).get("league")?.value === "us" ? "us" : "kr";
+  redirect(`/${league}/discover`);
 }
