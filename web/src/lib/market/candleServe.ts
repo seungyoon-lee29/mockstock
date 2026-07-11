@@ -4,14 +4,16 @@
 import {
   CANDLE_LIMITS,
   TF_MINUTES,
+  isoWeekStart,
   type ChartTimeframe,
   type DailyCandle,
   type IntradayCandle,
   type Market,
+  type Tick,
 } from "@mockstock/shared";
-// REGULAR_SESSION 상수만 사용(시장 tz 단일 소스 — 하드코딩 금지). calendar 서브패스지만
-// 순수 상수·달력 데이터라 클라 번들에 무해(수십 라인).
-import { REGULAR_SESSION } from "@mockstock/shared/calendar";
+// REGULAR_SESSION·toMinutes만 사용(시장 tz·세션 경계 단일 소스 — 하드코딩 금지).
+// calendar 서브패스지만 순수 상수·달력 데이터라 클라 번들에 무해(수십 라인).
+import { REGULAR_SESSION, toMinutes } from "@mockstock/shared/calendar";
 
 /** 분봉 계열 tf ("1m"…"60m"). */
 export type MinuteTf = keyof typeof TF_MINUTES;
@@ -53,6 +55,58 @@ export function marketDayOf(market: Market, at: Date): string {
   return fmt.format(at); // en-CA 로케일 = "YYYY-MM-DD"
 }
 
+// 분봉 X축 라벨 — lightweight-charts는 tz 개념이 없어 UTCTimestamp를 UTC로 포맷한다.
+// 시장 tz(REGULAR_SESSION 단일 소스)로 직접 포맷해 KST/ET 장시간이 그대로 보이게 한다.
+// Intl 인스턴스는 시장별 캐시(marketDayOf와 동일 관용구 — 눈금마다 생성 금지).
+const timeLabelFmt: Partial<Record<Market, Intl.DateTimeFormat>> = {};
+const dateLabelFmt: Partial<Record<Market, Intl.DateTimeFormat>> = {};
+
+/** epoch 초 → 시장 로컬 "HH:mm" (분봉 눈금·크로스헤어). */
+export function formatMarketTime(market: Market, timeSec: number): string {
+  const fmt = (timeLabelFmt[market] ??= new Intl.DateTimeFormat("ko-KR", {
+    timeZone: REGULAR_SESSION[market].tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23", // "24:00" 표기 방지 — 자정은 00:00
+  }));
+  return fmt.format(new Date(timeSec * 1000));
+}
+
+/** epoch 초 → 시장 로컬 "M. D." (분봉 날짜 경계 눈금 — ko-KR 숫자 날짜). */
+export function formatMarketDate(market: Market, timeSec: number): string {
+  const fmt = (dateLabelFmt[market] ??= new Intl.DateTimeFormat("ko-KR", {
+    timeZone: REGULAR_SESSION[market].tz,
+    month: "numeric",
+    day: "numeric",
+  }));
+  return fmt.format(new Date(timeSec * 1000));
+}
+
+const DAY_SEC = 24 * 60 * 60;
+
+/**
+ * 분봉 기본 조회창 시작(epoch 초) — 벽시계 소급이 아니라 **거래 세션 기준**.
+ * 요구 의미는 "최근 캡×tf분의 벽시계"가 아니라 "최근 캡개의 캔들 데이터" — 벽시계 창은
+ * 주말에 금요일장(33h 전)이 창 밖으로 밀려 0봉이 되는 버그의 근본 원인.
+ * 필요 세션 수 = ceil(캡×tf분 / 세션분(REGULAR_SESSION open/close 파생)) + 1(여유).
+ * 공휴일은 캘린더 미반영이라 무시 — 창이 다소 넓어질 뿐이고, 조회는 desc+limit,
+ * 워커 백필(krMinuteRange)이 빈 날을 데이터 기반으로 건너뛰므로 넓은 창은 무해(알려진 한계).
+ */
+export function minuteLookbackFromSec(market: Market, tf: MinuteTf, now: Date): number {
+  const { open, close } = REGULAR_SESSION[market];
+  const sessionMinutes = toMinutes(close) - toMinutes(open);
+  let need = Math.ceil((CANDLE_LIMITS.intradayCandleCap * TF_MINUTES[tf]) / sessionMinutes) + 1;
+  let t = Math.floor(now.getTime() / 1000);
+  while (need > 0) {
+    t -= DAY_SEC; // 하루씩 소급 — DST(±1h)로는 시장 로컬 날짜가 하루 단위를 벗어나지 않는다.
+    const day = marketDayOf(market, new Date(t * 1000));
+    const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+    if (dow !== 0 && dow !== 6) need--; // 토·일 제외한 시장 로컬 날짜만 세션으로 카운트
+  }
+  // 하루 더 소급해 마지막 카운트 세션의 개장 **이전**을 보장 — from은 하한일 뿐, 초과분은 limit이 흡수.
+  return t - DAY_SEC;
+}
+
 /** today("YYYY-MM-DD") 기준 days일 전 날짜 — 일봉 룩백 컷오프(dayLookbackDays). */
 export function lookbackStartDate(today: string, days: number): string {
   const d = new Date(`${today}T00:00:00Z`);
@@ -83,6 +137,30 @@ export function synthesizeTodayBar(
     }
   }
   return bar;
+}
+
+/**
+ * **확인된 실피드 틱만** 캔들 라이브 반영 허용 — worker.md B4 "mock 틱은 instruments 영속화에서
+ * 제외"의 차트 확장. mock은 실데이터 캔들 오염, source 미상(undefined)은 baseline 합성 quote
+ * (seedPrice·ts=0/lastPriceAt)라 캔들 집계 대상이 아니다 — 분봉 경로엔 기간 가드가 없어
+ * ts=0이 1970 캔들·개장 전 스테일 forming 버킷을 만든다(리뷰 실증). 둘 다 불허.
+ */
+export function isChartLiveSource(source: Tick["source"] | undefined): boolean {
+  return source != null && source !== "mock";
+}
+
+/**
+ * 일·주·월 라이브 갱신 가드 — 마지막 봉이 today(시장 로컬 "YYYY-MM-DD")가 속한 기간일 때만 갱신.
+ * week는 shared isoWeekStart(주봉 집계와 동일한 월요일 시작 규칙), month는 "YYYY-MM" 일치.
+ */
+export function isCurrentDailyPeriod(
+  tf: "day" | "week" | "month",
+  lastDate: string,
+  today: string,
+): boolean {
+  if (tf === "day") return lastDate === today;
+  if (tf === "week") return isoWeekStart(lastDate) === isoWeekStart(today);
+  return lastDate.slice(0, 7) === today.slice(0, 7);
 }
 
 /**

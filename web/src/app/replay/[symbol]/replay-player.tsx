@@ -305,7 +305,7 @@ function ReplaySession({
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card>
           <CardContent className="px-2">
-            <PriceChart symbol={symbol} data={chartData} currency={currency} height={360} />
+            <PriceChart symbol={symbol} data={chartData} market={market} currency={currency} height={360} />
           </CardContent>
         </Card>
 

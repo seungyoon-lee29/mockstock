@@ -55,7 +55,8 @@ export async function fetchSnapshot(market: Market, symbol: string): Promise<Sna
  * from/to = epoch **초**. 분봉 tf → IntradayCandle[], 일봉 계열 → DailyCandle[](워커 계약).
  * 백필은 장식이라 **fail-open**: 미설정·연결 실패·타임아웃·비200·비배열 응답 전부 null →
  * 호출부(/api/candles)는 조용히 DB-only로 강등한다.
- * 타임아웃은 외부 API(KIS/Alpaca) 경유라 스냅샷(2.5s)과 별개 env — BACKFILL_TIMEOUT_MS(기본 8000).
+ * 타임아웃은 외부 API(KIS/Alpaca) 경유라 스냅샷(2.5s)과 별개 env — BACKFILL_TIMEOUT_MS(기본 15000).
+ * 산출 근거: KIS 콜 예산 10 ÷ 2 RPS 페이싱 + 주말 빈 날 스킵 + 왕복 여유 ≈ 실측 10s 상회.
  */
 export async function fetchBackfillCandles(
   market: Market,
@@ -75,7 +76,7 @@ export async function fetchBackfillCandles(
   url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
 
-  const timeoutMs = Number(process.env.BACKFILL_TIMEOUT_MS) || 8_000; // env 런타임 lazy 접근
+  const timeoutMs = Number(process.env.BACKFILL_TIMEOUT_MS) || 15_000; // env 런타임 lazy 접근
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {

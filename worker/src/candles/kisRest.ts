@@ -4,7 +4,9 @@
 //  - 레이트: KIS_REST_RPS(기본 2 — 실측 계정 한도 초당 2건) — 최소 간격 직렬화로 초당 호출 상한(토큰버킷 등가).
 //    초과 시 KIS는 EGW00201("초당 거래건수 초과")을 HTTP 500으로 거부 — kisGet이 1회 재시도.
 //  - 키(KIS_APP_KEY/SECRET) 부재 시 모듈 비활성 — 호출부는 빈 배열을 받는다(fail-soft).
-// 도메인은 KIS_REST_BASE(기본 실전) — 현 WS는 VTS라 시세성 TR의 VTS 미지원 가능성 대응(스펙 §KIS REST).
+// 도메인은 KIS_REST_BASE(기본 실전). 모의(VTS) 앱키는 실전 도메인에서 분봉 TR(FHKST03010230)이
+// EGW02004로 거부됨(일봉은 허용) — 모의 키면 KIS_REST_BASE를 VTS(openapivts...:29443)로 설정할 것.
+// VTS 도메인에서 일·분봉 모두 정상 동작 실측(2026-07-11).
 import type { DailyCandle, IntradayCandle } from "@mockstock/shared";
 
 /** env 정수 파서(지연 읽기 — 테스트에서 env 주입 가능). 비수치·미설정은 기본값. */
@@ -213,8 +215,9 @@ type KisMinuteRow = {
 /**
  * 주식일별분봉조회(FHKST03010230) — dateYmd 하루 안에서 hhmmss 이하 최근 120건(역순).
  * 반환은 time(epoch 초) 오름차순 IntradayCandle[]. 키 없으면 [].
- * 시간 라벨은 stck_cntg_hour를 버킷 시작으로 해석 — UNCONFIRMED-라벨관례: KIS 분봉이
- * 종료시각 라벨이면 60초 보정 필요, 실호출로 검증.
+ * 시간 라벨: stck_cntg_hour는 **버킷 시작 라벨**(확정 — 2026-07-10분 VTS 실호출에서
+ * 개장 경계 로우가 090000으로 시작, 개장 동시호가 거래량 포함. 종료 라벨이면 최소가 090100이어야 함).
+ * 따라서 kstEpochSec 그대로 사용, 60초 보정 불필요. VTS 실측 — 실전 도메인 동일성 미확인.
  */
 export async function fetchKrMinutes(symbol: string, dateYmd: string, hhmmss: string): Promise<IntradayCandle[]> {
   if (!isKisRestEnabled()) return [];
@@ -223,8 +226,10 @@ export async function fetchKrMinutes(symbol: string, dateYmd: string, hhmmss: st
     FID_INPUT_ISCD: symbol,
     FID_INPUT_DATE_1: dateYmd,
     FID_INPUT_HOUR_1: hhmmss,
-    FID_PW_DATA_INCU_YN: "N", // UNCONFIRMED-필드명: 실호출로 검증 필요(과거 데이터 포함 여부)
-    FID_FAKE_TICK_INCU_YN: "N", // UNCONFIRMED-필드명: 실호출로 검증 필요(허봉 포함 여부)
+    // 아래 2개 필드명은 의미 미검증 — rt_cd 0으로 호출은 성공하나(2026-07-11 VTS) 게이트웨이가
+    // 미지 파라미터를 조용히 무시해도 같은 결과. 확정하려면 Y/N 토글 응답 비교 필요.
+    FID_PW_DATA_INCU_YN: "N", // 의도: 과거 데이터 미포함
+    FID_FAKE_TICK_INCU_YN: "N", // 의도: 허봉 미포함
   });
   const rows = (json.output2 ?? []) as KisMinuteRow[];
   const out: IntradayCandle[] = [];

@@ -7,17 +7,21 @@ import {
   createChart,
   ColorType,
   CandlestickSeries,
-  LineSeries,
+  TickMarkType,
   type ISeriesApi,
   type CandlestickData,
-  type LineData,
   type Time,
 } from "lightweight-charts";
-import { PRICE_COLORS, TF_MINUTES, type ChartTimeframe, type Currency } from "@mockstock/shared";
+import {
+  PRICE_COLORS,
+  TF_MINUTES,
+  type ChartTimeframe,
+  type Currency,
+  type Market,
+} from "@mockstock/shared";
+import { formatMarketDate, formatMarketTime } from "@/lib/market/candleServe";
 import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
-
-export type PriceChartType = "candlestick" | "line";
 
 /**
  * CSS가 준 색을 lightweight-charts ColorParser가 아는 hex/rgb로 정규화한다.
@@ -42,10 +46,11 @@ function toChartColor(raw: string): string | undefined {
 type PriceChartProps = {
   /** 접근성 라벨용 심볼. 데이터는 props로만 주입한다. */
   symbol?: string;
-  type?: PriceChartType;
-  data: CandlestickData<Time>[] | LineData<Time>[];
+  data: CandlestickData<Time>[];
   /** 타임프레임 — 분봉 tf면 x축에 시각(HH:mm) 표시. 미지정 시 기존 동작(날짜만). */
   timeframe?: ChartTimeframe;
+  /** 시장 — 분봉 x축·크로스헤어를 시장 tz(KST/ET)로 표기. 미지정 시 라이브러리 기본(UTC). */
+  market?: Market;
   /** 지정 시 y축 가격 라벨을 통화 포맷(KRW 정수·USD 2자리, format.ts)으로 표기. */
   currency?: Currency;
   /** 차트 높이(px). */
@@ -55,17 +60,15 @@ type PriceChartProps = {
 
 export function PriceChart({
   symbol,
-  type = "candlestick",
   data,
   timeframe,
+  market,
   currency,
   height = 320,
   className,
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const seriesRef = useRef<
-    ISeriesApi<"Candlestick"> | ISeriesApi<"Line"> | null
-  >(null);
+  const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
 
   // 분봉↔일봉 카테고리 — Time 타입(UTCTimestamp vs "YYYY-MM-DD" 문자열)이 한 시리즈에 섞이면
   // lightweight-charts가 throw한다. 카테고리 전환 시 차트·시리즈를 재생성한다(생성 effect deps).
@@ -79,9 +82,12 @@ export function PriceChart({
 
     const cs = getComputedStyle(el);
     // getComputedStyle 색은 rgb 보장이 없다(oklch→lab 직렬화) — 반드시 정규화 후 전달.
-    const axisColor = toChartColor(cs.color);
-    const lineColor =
-      toChartColor(cs.getPropertyValue("--color-brand").trim()) ?? PRICE_COLORS.up;
+    // 축 텍스트: 컨테이너 currentColor(text-foreground 토큰) → 브랜드 토큰 → PRICE_COLORS.up.
+    // 라이브러리 기본 textColor(#191919)는 다크 배경에서 안 보인다 — 폴백까지 항상 명시 지정.
+    const axisColor =
+      toChartColor(cs.color) ??
+      toChartColor(cs.getPropertyValue("--color-brand").trim()) ??
+      PRICE_COLORS.up;
 
     // 차트 내부 예외(색 파싱 등)가 useEffect 밖으로 새면 React가 트리 전체를 언마운트한다 —
     // 차트만 생략하고 페이지는 살린다(a0 §1).
@@ -91,7 +97,7 @@ export function PriceChart({
         autoSize: true,
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
-          ...(axisColor ? { textColor: axisColor } : {}),
+          textColor: axisColor,
           attributionLogo: false,
         },
         grid: {
@@ -99,30 +105,45 @@ export function PriceChart({
           horzLines: { visible: false },
         },
         rightPriceScale: { borderVisible: false },
-        timeScale: { borderVisible: false, timeVisible: isMinute, secondsVisible: false },
+        timeScale: {
+          borderVisible: false,
+          timeVisible: isMinute,
+          secondsVisible: false,
+          // 분봉 눈금은 시장 tz로 — 라이브러리는 tz 미지원이라 UTCTimestamp를 UTC로 찍는다(버그 원인).
+          // 시각 눈금은 HH:mm, 날짜 경계(Year/Month/DayOfMonth) 눈금은 시장 로컬 날짜.
+          ...(isMinute && market
+            ? {
+                tickMarkFormatter: (time: Time, mark: TickMarkType) =>
+                  mark === TickMarkType.Time || mark === TickMarkType.TimeWithSeconds
+                    ? formatMarketTime(market, Number(time))
+                    : formatMarketDate(market, Number(time)),
+              }
+            : {}),
+        },
         localization: {
           locale: "ko-KR",
           // 통화 미지정이면 라이브러리 기본 포맷(기존 동작) 유지.
           ...(currency ? { priceFormatter: (p: number) => formatPrice(p, currency) } : {}),
+          // 크로스헤어 툴팁도 시장 tz(날짜+시각) — 일·주·월은 date 문자열이라 기존 동작 유지.
+          ...(isMinute && market
+            ? {
+                timeFormatter: (t: Time) =>
+                  `${formatMarketDate(market, Number(t))} ${formatMarketTime(market, Number(t))}`,
+              }
+            : {}),
         },
       });
 
-      if (type === "line") {
-        const s = chart.addSeries(LineSeries, { color: lineColor, lineWidth: 2 });
-        s.setData(data as LineData<Time>[]);
-        seriesRef.current = s;
-      } else {
-        const s = chart.addSeries(CandlestickSeries, {
-          upColor: PRICE_COLORS.up,
-          downColor: PRICE_COLORS.down,
-          borderUpColor: PRICE_COLORS.up,
-          borderDownColor: PRICE_COLORS.down,
-          wickUpColor: PRICE_COLORS.up,
-          wickDownColor: PRICE_COLORS.down,
-        });
-        s.setData(data as CandlestickData<Time>[]);
-        seriesRef.current = s;
-      }
+      const s = chart.addSeries(CandlestickSeries, {
+        upColor: PRICE_COLORS.up,
+        downColor: PRICE_COLORS.down,
+        borderUpColor: PRICE_COLORS.up,
+        borderDownColor: PRICE_COLORS.down,
+        wickUpColor: PRICE_COLORS.up,
+        wickDownColor: PRICE_COLORS.down,
+      });
+      s.setData(data);
+      seriesRef.current = s;
       chart.timeScale().fitContent();
     } catch (err) {
       console.error("[PriceChart] 차트 생성 실패 — 차트만 생략:", err);
@@ -142,24 +163,25 @@ export function PriceChart({
     // data는 아래 별도 effect가 setData로 갱신 → 데이터 변경 시 차트 재생성 안 함(리플레이 스트리밍 대비).
     // isMinute(tf 카테고리)는 deps 필수 — 분↔일 전환 시 재생성해야 Time 타입이 안 섞인다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [type, isMinute, currency]);
+  }, [isMinute, currency, market]);
 
-  // 데이터 주입 갱신. 시리즈 union 때문에 setData 인자는 never 캐스팅(런타임은 필드만 읽어 안전).
+  // 데이터 주입 갱신.
   useEffect(() => {
     try {
-      seriesRef.current?.setData(data as never);
+      seriesRef.current?.setData(data);
     } catch (err) {
       console.error("[PriceChart] 데이터 반영 실패 — 이번 갱신만 생략:", err);
     }
   }, [data]);
 
+  // text-foreground: 축 텍스트 색의 원천(currentColor) — muted는 다크에서 저대비.
   return (
     <div
       ref={containerRef}
       role="img"
       aria-label={symbol ? `${symbol} 가격 차트` : "가격 차트"}
       style={{ height }}
-      className={cn("w-full text-muted-foreground", className)}
+      className={cn("w-full text-foreground", className)}
     />
   );
 }

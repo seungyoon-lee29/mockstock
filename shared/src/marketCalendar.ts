@@ -21,8 +21,8 @@ export const REGULAR_SESSION: Record<Market, { tz: string; open: string; close: 
   US: { tz: "America/New_York", open: "09:30", close: "16:00" },
 };
 
-/** "HH:MM"(현지) → 자정 기준 분. */
-function toMinutes(hhmm: string): number {
+/** "HH:MM"(현지) → 자정 기준 분. export: 세션 길이 파생(web candleServe 분봉 룩백)용. */
+export function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(":");
   return Number(h) * 60 + Number(m);
 }

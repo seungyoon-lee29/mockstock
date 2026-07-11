@@ -31,6 +31,8 @@ export interface Quote {
   change: number; // price - prevClose
   changePct: number; // %
   ts: number;
+  /** 원 틱의 피드 출처 — mock 틱을 차트 반영에서 걸러내는 데 사용(B4 확장). */
+  source?: Tick["source"];
 }
 
 export function toQuote(tick: Tick, prevClose: number): Quote {
@@ -43,6 +45,8 @@ export function toQuote(tick: Tick, prevClose: number): Quote {
     change,
     changePct: prevClose ? (change / prevClose) * 100 : 0,
     ts: tick.ts,
+    // source 미상 틱(baseline 합성 등)은 키 자체를 생략 — deepEqual 소비자·직렬화에 잡음 없게.
+    ...(tick.source !== undefined ? { source: tick.source } : {}),
   };
 }
 

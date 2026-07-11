@@ -1,10 +1,10 @@
 "use client";
 
-// 종목 상세: 현재가·등락 + SSE 틱 차트 + 주문 패널.
-// 토글: 라인(실시간 틱 누적) · 분▾(1·5·10·15·30·60분봉) · 일 · 주 · 월 — 캔들은 useCandles(tf)가
+// 종목 상세: 현재가·등락 + 캔들 차트 + 주문 패널.
+// 토글: 분▾(1·5·10·15·30·60분봉) · 일 · 주 · 월 — 캔들은 useCandles(tf)가
 // 백필+라이브 병합까지 담당(계약: 분봉=IntradayCandle[](time=초), 일·주·월=DailyCandle[](date 문자열)).
 import { useMemo, useState } from "react";
-import type { CandlestickData, LineData, Time, UTCTimestamp } from "lightweight-charts";
+import type { CandlestickData, Time, UTCTimestamp } from "lightweight-charts";
 import { keyOf, TF_MINUTES, type ChartTimeframe, type UniverseEntry } from "@mockstock/shared";
 import { ChevronDownIcon } from "lucide-react";
 import { usePrices } from "@/lib/market/usePrices";
@@ -22,9 +22,6 @@ import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
 import { OrderPanel } from "./order-panel";
 
-const MAX_POINTS = 300; // ponytail: 최근 N틱만 유지 — 세션 길어져도 메모리·렌더 상한 고정.
-
-type Timeframe = "line" | ChartTimeframe;
 const CHART_HEIGHT = 360;
 
 // 분▾ 드롭다운 항목 — 라벨은 TF_MINUTES(단일 소스)에서 파생(매직 라벨 산재 금지).
@@ -48,39 +45,14 @@ const tfButtonClass = (active: boolean) =>
       : "text-muted-foreground hover:text-foreground",
   );
 
-/** SSE 최신 틱(ts·price)을 라인 시리즈로 누적. lightweight-charts는 시간 오름차순·유일을 요구한다. */
-function usePriceSeries(ts: number | undefined, price: number | undefined): LineData<Time>[] {
-  const [series, setSeries] = useState<LineData<Time>[]>([]);
-  // effect 내 setState(lint set-state-in-effect) 대신 렌더 중 상태 조정 패턴
-  // (react.dev "adjusting state when a prop changes") — 직전 반영 틱과 다를 때만 누적.
-  const [applied, setApplied] = useState<{ ts: number; price: number } | null>(null);
-  if (ts != null && price != null && (applied?.ts !== ts || applied?.price !== price)) {
-    setApplied({ ts, price });
-    const time = Math.floor(ts / 1000) as UTCTimestamp; // ms→s (UTCTimestamp는 초 단위)
-    const last = series[series.length - 1];
-    if (last && (last.time as number) === time) {
-      // 같은 초 내 갱신 → 마지막 점 값만 교체(유일 시간 유지).
-      setSeries([...series.slice(0, -1), { time, value: price }]);
-    } else if (!last || (last.time as number) < time) {
-      // 역행 틱(last.time > time)은 무시.
-      const next = [...series, { time, value: price }];
-      setSeries(next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next);
-    }
-  }
-  return series;
-}
-
 export function StockDetail({ entry }: { entry: UniverseEntry }) {
   const quotes = usePrices([{ market: entry.market, symbol: entry.symbol }]);
   const quote = quotes[keyOf(entry.market, entry.symbol)];
-  const series = usePriceSeries(quote?.ts, quote?.price);
 
-  const [tf, setTf] = useState<Timeframe>("line");
-  const isMinute = tf !== "line" && tf in TF_MINUTES;
+  const [tf, setTf] = useState<ChartTimeframe>("1m");
+  const isMinute = tf in TF_MINUTES;
 
-  // 훅 규칙상 항상 호출 — 라인 모드에서는 기본 tf(1m)로 대기(계약: 요청 tf로 응답 타입 분기).
-  const chartTf: ChartTimeframe = tf === "line" ? "1m" : tf;
-  const raw = useCandles(entry.market, entry.symbol, chartTf);
+  const raw = useCandles(entry.market, entry.symbol, tf);
 
   // 계약 매핑: 분봉=time(epoch 초)→UTCTimestamp, 일·주·월=date("YYYY-MM-DD") 문자열 그대로
   // (lightweight-charts Time은 date 문자열 허용 — epoch 변환 금지, 스펙 확정).
@@ -129,9 +101,6 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <div className="rounded-2xl border bg-card p-4">
           <div className="mb-3 inline-flex rounded-lg bg-muted p-1">
-            <button type="button" onClick={() => setTf("line")} className={tfButtonClass(tf === "line")}>
-              라인
-            </button>
             <DropdownMenu>
               <DropdownMenuTrigger
                 className={cn(tfButtonClass(isMinute), "inline-flex items-center gap-0.5")}
@@ -159,29 +128,12 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
             ))}
           </div>
 
-          {tf === "line" ? (
-            series.length > 0 ? (
-              <PriceChart
-                symbol={entry.symbol}
-                type="line"
-                data={series}
-                currency={entry.currency}
-                height={CHART_HEIGHT}
-              />
-            ) : (
-              <div
-                className="flex items-center justify-center text-sm text-muted-foreground"
-                style={{ height: CHART_HEIGHT }}
-              >
-                실시간 시세를 불러오는 중입니다…
-              </div>
-            )
-          ) : candles.length > 0 ? (
+          {candles.length > 0 ? (
             <PriceChart
               symbol={entry.symbol}
-              type="candlestick"
               data={candles}
               timeframe={tf}
+              market={entry.market}
               currency={entry.currency}
               height={CHART_HEIGHT}
             />

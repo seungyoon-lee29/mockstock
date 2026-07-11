@@ -97,8 +97,10 @@ export function applyBaseline(
       );
       changed = true;
     } else if (cur.prevClose !== prevClose) {
+      // source 보존 필수 — 유실되면 mock 틱이 source 세탁으로 차트 가드를 통과하고,
+      // source 변동이 useCandles effect 재실행(실피드 v 이중 계상)을 유발한다.
       next[k] = toQuote(
-        { market: cur.market, symbol: cur.symbol, price: cur.price, ts: cur.ts },
+        { market: cur.market, symbol: cur.symbol, price: cur.price, ts: cur.ts, source: cur.source },
         prevClose,
       );
       changed = true;

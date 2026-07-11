@@ -38,8 +38,9 @@ export const CANDLE_LIMITS = {
   dayRowCap: 750,
 } as const;
 
-/** 날짜("YYYY-MM-DD")가 속한 ISO주(월요일) 시작일을 UTC로 계산 → 같은 주 판별 키. */
-function isoWeekStart(date: string): string {
+/** 날짜("YYYY-MM-DD")가 속한 ISO주(월요일) 시작일을 UTC로 계산 → 같은 주 판별 키.
+ * 주봉 집계·라이브 갱신 가드(web candleServe)가 공유하는 주 귀속 규칙의 단일 소스. */
+export function isoWeekStart(date: string): string {
   const d = new Date(`${date}T00:00:00Z`);
   const dow = (d.getUTCDay() + 6) % 7; // 월=0 … 일=6
   d.setUTCDate(d.getUTCDate() - dow);

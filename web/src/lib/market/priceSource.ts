@@ -49,7 +49,8 @@ export function snapshot(keys: { market: Market; symbol: string }[]): Tick[] {
   const out: Tick[] = [];
   for (const k of keys) {
     const price = book.get(keyOf(k.market, k.symbol));
-    if (price != null) out.push({ market: k.market, symbol: k.symbol, price, ts });
+    // source:"mock" 필수 — worker mock 피드와 동일 계약. 누락 시 차트 mock 가드(isChartLiveSource)가 뚫린다.
+    if (price != null) out.push({ market: k.market, symbol: k.symbol, price, ts, source: "mock" });
   }
   return out;
 }

@@ -17,7 +17,13 @@ import {
   type Market,
 } from "@mockstock/shared";
 import { usePrices } from "./usePrices";
-import { isMinuteTf, marketDayOf, mergeLiveCandles } from "./candleServe";
+import {
+  isChartLiveSource,
+  isCurrentDailyPeriod,
+  isMinuteTf,
+  marketDayOf,
+  mergeLiveCandles,
+} from "./candleServe";
 
 const MAX_CANDLES = CANDLE_LIMITS.intradayCandleCap; // 분봉 유지 상한 — 서버 캡과 동일 정책.
 const SEC = 60; // 분→초 환산 — aggregateIntraday(shared)와 동일 경계.
@@ -35,6 +41,7 @@ export function useCandles(
   const quote = quotes[keyOf(market, symbol)];
   const ts = quote?.ts; // epoch ms
   const price = quote?.price;
+  const source = quote?.source; // mock 여부 판별용(B4 차트 확장)
 
   const [backfill, setBackfill] = useState<IntradayCandle[]>([]); // 분봉 서버 정본
   const [daily, setDaily] = useState<DailyCandle[]>([]); // 일·주·월 서버 응답
@@ -70,6 +77,7 @@ export function useCandles(
   // 분봉 라이브 집계: 틱을 tf 버킷(epoch floor)에 fold. 롤오버 시 직전 버킷을 completed로 승격.
   useEffect(() => {
     if (ts == null || price == null || !isMinuteTf(tf)) return;
+    if (!isChartLiveSource(source)) return; // 확인된 실피드 틱만 분봉 집계(B4 차트 확장 — mock·baseline 합성 제외)
     const size = TF_MINUTES[tf] * SEC;
     const sec = Math.floor(ts / 1000);
     const bucket = sec - (sec % size);
@@ -94,25 +102,26 @@ export function useCandles(
       };
     }
     setForming(curRef.current);
-  }, [market, symbol, tf, ts, price]);
+  }, [market, symbol, tf, ts, price, source]);
 
   // 일·주·월 라이브: **마지막 봉만** h/l/c 갱신. 응답이 비었으면 그대로 빈 배열(봉 생성 금지 — 계약).
   useEffect(() => {
     if (ts == null || price == null || isMinuteTf(tf)) return;
+    if (!isChartLiveSource(source)) return; // 확인된 실피드 틱만 마지막 봉 갱신(B4 차트 확장 — mock·baseline 합성 제외)
     const today = marketDayOf(market, new Date(ts)); // "오늘"은 시장 tz(US 세션은 KST 이틀에 걸침)
     setDaily((prev) => {
       const last = prev[prev.length - 1];
       if (!last) return prev;
-      // day: 마지막 봉이 오늘 봉일 때만(서버가 합성을 생략한 정직한 공백을 클라가 메우지 않는다).
-      // ponytail: week/month는 마지막 봉이 현재 기간이라 가정하고 갱신 — 스테일 데이터면 어차피 낡은 차트.
-      if (tf === "day" && last.date !== today) return prev;
+      // 마지막 봉이 오늘이 속한 기간(day=당일, week=ISO주, month=월)일 때만 — 서버가 합성을
+      // 생략한 정직한 공백을 클라가 메우지 않고, 스테일 마지막 봉을 라이브로 덮지 않는다.
+      if (!isCurrentDailyPeriod(tf, last.date, today)) return prev;
       if (price === last.c && price <= last.h && price >= last.l) return prev; // 무변화 → 참조 유지
       return [
         ...prev.slice(0, -1),
         { ...last, h: Math.max(last.h, price), l: Math.min(last.l, price), c: price },
       ];
     });
-  }, [market, tf, ts, price]);
+  }, [market, tf, ts, price, source]);
 
   // 분봉 병합: 백필 마지막과 겹치는 라이브 버킷은 **결합**(h/l 확장·c 라이브 — 덮으면 최신 틱 유실),
   // 더 최신 라이브 버킷은 이어붙이고 더 과거 라이브는 폐기. 캡 적용.

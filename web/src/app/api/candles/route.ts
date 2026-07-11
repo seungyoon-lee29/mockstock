@@ -26,6 +26,7 @@ import {
   lookbackStartDate,
   marketDayOf,
   mergeCandles,
+  minuteLookbackFromSec,
   minuteRowLimit,
   missingOlderRange,
   synthesizeTodayBar,
@@ -36,7 +37,7 @@ export const dynamic = "force-dynamic"; // query 파싱 = 요청시점 데이터
 export const runtime = "nodejs";
 
 const MARKETS: readonly Market[] = ["US", "KR"];
-const DEFAULT_LOOKBACK_SEC = 24 * 60 * 60; // from 미지정 시 최소 소급(1m 기존 계약 유지 + 당일 분봉 조회).
+const DEFAULT_LOOKBACK_SEC = 24 * 60 * 60; // 당일 봉 합성용 분봉 소급(시장 tz "오늘"은 최대 24h 전 시작).
 
 /** epoch 초(숫자문자열) 또는 ISO 문자열 → Date. 파싱 실패는 undefined. */
 function parseTime(v: string | null): Date | undefined {
@@ -77,12 +78,10 @@ async function serveMinutes(
   q: URLSearchParams,
 ): Promise<Response> {
   const to = parseTime(q.get("to")) ?? new Date();
-  // 기본 룩백: 캔들캡을 채울 수 있는 구간(캡×분수×60초). 1m은 기존 24h 계약이 더 크므로 유지.
-  const lookbackSec = Math.max(
-    DEFAULT_LOOKBACK_SEC,
-    CANDLE_LIMITS.intradayCandleCap * TF_MINUTES[tf] * 60,
-  );
-  const from = parseTime(q.get("from")) ?? new Date(to.getTime() - lookbackSec * 1000);
+  // 기본 룩백: **거래 세션 기준**(minuteLookbackFromSec) — 벽시계 소급은 주말에 금요일장이
+  // 창 밖으로 밀려 0봉이 되는 버그. 항상 2세션+ 소급이라 기존 1m 24h 계약보다 깊다(대체).
+  const from =
+    parseTime(q.get("from")) ?? new Date(minuteLookbackFromSec(market, tf, to) * 1000);
   // parseTime이 Invalid Date를 undefined로 걸러 fallback되지만, 신뢰 경계 최후 방어선으로 명시 검증한다.
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
     return Response.json({ message: "기간이 올바르지 않습니다." }, { status: 400 });
