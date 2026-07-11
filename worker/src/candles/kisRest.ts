@@ -1,7 +1,8 @@
 // KIS REST 클라이언트 (KR 과거 캔들 백필·일봉 동기화 — 멀티 타임프레임 v2 배치 B).
 // tokenP 매니저는 feeds/kis.ts의 WS approval_key와 **완전 분리**(별도 자격 경로, 상호작용 없음).
 //  - 24h 인메모리 캐시 + 재발급 1분 스로틀(EGW00133 가드) + 401 시 1회 갱신 재시도.
-//  - 레이트: KIS_REST_RPS(기본 5) — 최소 간격 직렬화로 초당 호출 상한(토큰버킷 등가).
+//  - 레이트: KIS_REST_RPS(기본 2 — 실측 계정 한도 초당 2건) — 최소 간격 직렬화로 초당 호출 상한(토큰버킷 등가).
+//    초과 시 KIS는 EGW00201("초당 거래건수 초과")을 HTTP 500으로 거부 — kisGet이 1회 재시도.
 //  - 키(KIS_APP_KEY/SECRET) 부재 시 모듈 비활성 — 호출부는 빈 배열을 받는다(fail-soft).
 // 도메인은 KIS_REST_BASE(기본 실전) — 현 WS는 VTS라 시세성 TR의 VTS 미지원 가능성 대응(스펙 §KIS REST).
 import type { DailyCandle, IntradayCandle } from "@mockstock/shared";
@@ -52,6 +53,7 @@ export function _resetKisRestForTest(): void {
 
 async function issueToken(): Promise<string> {
   lastIssueAt = Date.now();
+  await throttle(); // tokenP도 초당 건수에 포함 — 슬롯을 선점해 직후 TR과 같은 초에 몰리지 않게
   const res = await fetch(`${restBase()}${TOKEN_PATH}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -78,19 +80,32 @@ async function getToken(): Promise<string> {
   return issuing;
 }
 
+function restIntervalMs(): number {
+  return 1_000 / envInt("KIS_REST_RPS", 2);
+}
+
 /** KIS_REST_RPS 기반 최소 간격 직렬화 — 초당 호출 수 상한(토큰버킷 등가, 버스트 없음). */
 async function throttle(): Promise<void> {
-  const interval = 1_000 / envInt("KIS_REST_RPS", 5);
+  const interval = restIntervalMs();
   const now = Date.now();
   const at = Math.max(now, nextCallAt);
   nextCallAt = at + interval;
   if (at > now) await new Promise((r) => setTimeout(r, at - now));
 }
 
-/** 공통 GET — 인증 헤더 + 401 시 토큰 1회 갱신 재시도 + rt_cd 검사. */
+/** 에러 응답 본문에서 msg_cd/msg1 추출 — JSON이 아니면 빈 값(TR 응답 한정, tokenP 본문엔 사용 금지). */
+function parseKisErrorBody(text: string): { msgCd: string; msg1: string } {
+  try {
+    const j = JSON.parse(text) as { msg_cd?: string; msg1?: string };
+    return { msgCd: j.msg_cd ?? "", msg1: j.msg1 ?? "" };
+  } catch {
+    return { msgCd: "", msg1: "" };
+  }
+}
+
+/** 공통 GET — 인증 헤더 + 401 시 토큰 1회 갱신 재시도 + EGW00201 1회 재시도 + rt_cd 검사. */
 async function kisGet(path: string, trId: string, params: Record<string, string>): Promise<Record<string, unknown>> {
-  await throttle();
-  let tok = await getToken();
+  let tok = await getToken(); // 토큰 먼저 — 발급 지연이 fetch 간 간격을 압축하지 않게 스로틀은 fetch 직전에
   const url = new URL(restBase() + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const headers = (t: string) => ({
@@ -101,16 +116,28 @@ async function kisGet(path: string, trId: string, params: Record<string, string>
     tr_id: trId,
     custtype: "P", // 개인
   });
+  await throttle();
   let res = await fetch(url, { headers: headers(tok) });
   if (res.status === 401) {
     token = null; // 무효화 → 1회 갱신 재시도(스로틀 내 재발급이면 getToken이 던짐 — 그대로 전파)
     tok = await getToken();
+    await throttle();
     res = await fetch(url, { headers: headers(tok) });
   }
-  if (!res.ok) throw new Error(`kis ${trId} HTTP ${res.status}`);
-  const json = (await res.json()) as { rt_cd?: string; msg1?: string };
+  if (!res.ok) {
+    let { msgCd, msg1 } = parseKisErrorBody(await res.text().catch(() => ""));
+    if (msgCd === "EGW00201") {
+      // 초당 건수 초과(HTTP 500) — 고정 대기 후 1회만 재시도. 재시도도 throttle 경유(2/초 불변식 유지)
+      await new Promise((r) => setTimeout(r, envInt("KIS_RETRY_WAIT_MS", 1_100)));
+      await throttle();
+      res = await fetch(url, { headers: headers(tok) });
+      if (!res.ok) ({ msgCd, msg1 } = parseKisErrorBody(await res.text().catch(() => "")));
+    }
+    if (!res.ok) throw new Error(`kis ${trId} HTTP ${res.status} ${msgCd} ${msg1}`.trim());
+  }
+  const json = (await res.json()) as { rt_cd?: string; msg_cd?: string; msg1?: string };
   if (json.rt_cd !== undefined && json.rt_cd !== "0") {
-    throw new Error(`kis ${trId} rt_cd=${json.rt_cd} ${json.msg1 ?? ""}`.trim());
+    throw new Error([`kis ${trId} rt_cd=${json.rt_cd}`, json.msg_cd, json.msg1].filter(Boolean).join(" "));
   }
   return json as Record<string, unknown>;
 }

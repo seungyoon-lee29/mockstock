@@ -2,7 +2,7 @@
 // web은 일·주·월 tf를 이 테이블에서만 읽는다(주·월은 shared 롤업).
 //  - upsert: PK(market,symbol,date) onConflictDoUpdate — 재실행·수정주가 갱신에 멱등.
 //  - 부팅 체크: 심볼별 max(date) → 부족분만 백필(기본 DAILY_BACKFILL_DAYS=730).
-//    페이싱은 kisRest 레이트 리미터가 담당(KIS ≈190콜, Alpaca 48콜 — 1분 내).
+//    페이싱은 kisRest 레이트 리미터가 담당(KIS ≈190콜 — RPS 2 기준 ≈95초, Alpaca 48콜).
 //  - 키 부재 + 해당 시장 테이블 빈 상태 → **시장별** Discord 1회 경고(조용한 영구 공백 방지).
 import { sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
