@@ -32,7 +32,7 @@ export function isChartTimeframe(tf: string): tf is ChartTimeframe {
 
 /**
  * 분봉 tf의 1분 **로우** 조회 한도 = 캔들캡 × 분수.
- * 롤업 전에 캔들캡(240)을 로우에 적용하면 60m가 4개 캔들로 붕괴하는 함정 — shared CANDLE_LIMITS 주석 참조.
+ * 롤업 전에 캔들캡을 로우에 적용하면 60m가 소수 캔들로 붕괴하는 함정 — shared CANDLE_LIMITS 주석 참조.
  */
 export function minuteRowLimit(tf: MinuteTf): number {
   return CANDLE_LIMITS.intradayCandleCap * TF_MINUTES[tf];
