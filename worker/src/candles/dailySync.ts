@@ -8,7 +8,7 @@ import { sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { UNIVERSE, type DailyCandle, type Market } from "@mockstock/shared";
 import { REGULAR_SESSION } from "@mockstock/shared/calendar";
-import { dailyCandles } from "@mockstock/shared/schema";
+import { dailyCandles, instruments } from "@mockstock/shared/schema";
 import { envInt, isKisRestEnabled } from "./kisRest";
 import { fetchUsDaily, isAlpacaEnabled } from "./alpaca";
 import { krDailyRange } from "./backfillRoute";
@@ -92,11 +92,62 @@ export async function upsertDailyCandles(db: Db, market: Market, symbol: string,
 }
 
 /**
+ * 일봉 → instruments 시세 앵커 브리지. daily_candles 백필/동기화 직후 호출.
+ * 심볼별 최신 종가를 lastPrice/lastPriceAt(=거래일 자정), 그 전일 종가를 prevClose/prevCloseDate 로 upsert한다.
+ * 이게 유일한 단일 소스 다리다 — daily_candles(실 종가) → instruments(baseline API·mock 앵커).
+ *
+ * 프로덕션 회귀 가드(핵심): 실시간 틱(upsertLastPrices)은 lastPriceAt = 장중 실시각을 남긴다.
+ * 거래일 자정(candle date::timestamptz)보다 항상 나중이므로, `lastPriceAt IS NULL OR lastPriceAt < 거래일 자정`
+ * 조건이면 **오늘의 실틱이 항상 이긴다**. 키리스 mock 로컬(lastPriceAt NULL)에서만 종가가 앵커가 된다.
+ * prevClose는 tz 무관하게 `prevCloseDate IS DISTINCT FROM 전일` 일 때만 갱신(B7 updatePrevClose 멱등과 동일 관행).
+ * SQL만 반환하는 buildBridgeQuery 로 분리 — 단위 테스트가 실 DB 없이 가드 절을 검증한다.
+ */
+export function buildBridgeQuery(market: Market) {
+  // 심볼별 최근 2개 종가(row_number). r=1 최신(lastPrice), r=2 전일(prevClose).
+  return sql`
+    with ranked as (
+      select symbol, date, c,
+             row_number() over (partition by symbol order by date desc) as r
+      from ${dailyCandles}
+      where ${dailyCandles.market} = ${market}
+    ),
+    latest as (
+      select l.symbol,
+             l.date as last_date, l.c as last_c,
+             p.date as prev_date, p.c as prev_c
+      from ranked l
+      left join ranked p on p.symbol = l.symbol and p.r = 2
+      where l.r = 1
+    )
+    update ${instruments} i
+    set last_price = coalesce(l.last_c, i.last_price),
+        last_price_at = case
+          when i.last_price_at is null or i.last_price_at < l.last_date::timestamptz
+          then l.last_date::timestamptz else i.last_price_at end,
+        prev_close = case
+          when l.prev_c is not null and i.prev_close_date is distinct from l.prev_date
+          then l.prev_c else i.prev_close end,
+        prev_close_date = case
+          when l.prev_c is not null and i.prev_close_date is distinct from l.prev_date
+          then l.prev_date else i.prev_close_date end
+    from latest l
+    where i.market = ${market} and i.symbol = l.symbol
+      and (i.last_price_at is null or i.last_price_at < l.last_date::timestamptz)
+  `;
+}
+
+/** 브리지 실행 — 갱신 행 수 반환(로그·통지용). */
+export async function bridgeInstrumentsFromDaily(db: Db, market: Market): Promise<number> {
+  const res = (await db.execute(buildBridgeQuery(market))) as { rowCount?: number };
+  return res.rowCount ?? 0;
+}
+
+/**
  * 크론 일봉 동기화 — 시장별, 최근 SYNC_LOOKBACK_DAYS 창 upsert(멱등).
  * 키 없으면 no-op(빈 결과 반환 — 크론 통지에 skipped로 표기).
  */
-export async function syncDailyCandles(db: Db, market: Market): Promise<{ symbols: number; rows: number; errors: number }> {
-  const out = { symbols: 0, rows: 0, errors: 0 };
+export async function syncDailyCandles(db: Db, market: Market): Promise<{ symbols: number; rows: number; errors: number; bridged: number }> {
+  const out = { symbols: 0, rows: 0, errors: 0, bridged: 0 };
   if (!providerEnabled(market)) return out; // 키 부재 — fail-soft
   const to = localDate(market);
   const from = minusDays(to, SYNC_LOOKBACK_DAYS);
@@ -110,6 +161,7 @@ export async function syncDailyCandles(db: Db, market: Market): Promise<{ symbol
       console.error(`[dailySync] ${market}:${e.symbol} 동기화 실패`, err);
     }
   }
+  out.bridged = await bridgeInstrumentsFromDaily(db, market); // 실 종가 → instruments 앵커
   return out;
 }
 
@@ -121,7 +173,7 @@ export async function syncDailyCandles(db: Db, market: Market): Promise<{ symbol
 export async function bootBackfillDailyCandles(
   db: Db,
   notify: (text: string) => Promise<void>,
-): Promise<{ symbols: number; rows: number; errors: number }> {
+): Promise<{ symbols: number; rows: number; errors: number; bridged: number }> {
   const days = envInt("DAILY_BACKFILL_DAYS", 730);
   const maxRows = (await db
     .select({ market: dailyCandles.market, symbol: dailyCandles.symbol, max: sql<string>`max(${dailyCandles.date})` })
@@ -137,7 +189,7 @@ export async function bootBackfillDailyCandles(
   }
 
   const maxByKey = new Map(maxRows.map((r) => [`${r.market}:${r.symbol}`, r.max]));
-  const out = { symbols: 0, rows: 0, errors: 0 };
+  const out = { symbols: 0, rows: 0, errors: 0, bridged: 0 };
   for (const e of UNIVERSE) {
     if (!providerEnabled(e.market)) continue;
     const to = lastClosedDate(e.market);
@@ -152,5 +204,7 @@ export async function bootBackfillDailyCandles(
       console.error(`[dailySync] ${e.market}:${e.symbol} 부팅 백필 실패`, err);
     }
   }
+  // daily_candles(테이블에 이미 있던 실 종가 포함) → instruments 앵커. 백필 0행이어도 기존 종가로 브리지한다.
+  for (const market of ["KR", "US"] as const) out.bridged += await bridgeInstrumentsFromDaily(db, market);
   return out;
 }

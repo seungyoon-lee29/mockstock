@@ -7,12 +7,35 @@
 //    기존 last_price_at NULL(시드 직후)은 항상 패배, 그 외엔 excluded가 더 최신일 때만 갱신.
 import { sql } from "drizzle-orm";
 import type { PgDatabase } from "drizzle-orm/pg-core";
-import { getEntry, keyOf, UNIVERSE, type Tick } from "@mockstock/shared";
+import { getEntry, keyOf, seedPriceOf, UNIVERSE, type Tick } from "@mockstock/shared";
 import { isMarketOpen } from "@mockstock/shared/calendar";
 import { instruments } from "@mockstock/shared/schema";
 import { getDb } from "./db";
 
 type Db = PgDatabase<any, any, any>;
+
+/**
+ * instruments.lastPrice → mock 앵커 맵 로드(브리지 후 실 종가 반영). 인자 map을 제자리 갱신.
+ * **시드가와 다른(=실 종가 브리지된) 값만** 넣고 센다 — 부팅 시드(D12a)는 전 종목을 lastPrice=seedPrice로
+ * 채우므로, 필터 없이는 콜드 부팅에서 브리지 전에도 n>0이 되어 폴러가 조기 종료(스테일 seedPrice 락인)한다.
+ * 필터 후 n>0 은 "브리지가 착지했다"의 진짜 신호 — 실 종가가 생길 때까지 폴러가 계속 돈다.
+ * 아직 seedPrice인 행은 map에 넣지 않는다(mock 피드가 그대로 seedPrice 폴백).
+ * DB 없으면 no-op(키리스 로컬은 daily_candles도 없어 앵커 무의미 — seedPrice 폴백 유지).
+ */
+export async function loadAnchors(db: Db, map: Map<string, number>): Promise<number> {
+  const rows = await db
+    .select({ market: instruments.market, symbol: instruments.symbol, lastPrice: instruments.lastPrice })
+    .from(instruments);
+  let n = 0;
+  for (const r of rows) {
+    if (r.lastPrice == null) continue;
+    const price = Number(r.lastPrice);
+    if (price === seedPriceOf(r.market, r.symbol)) continue; // 아직 시드가 — 브리지 미착지, 스킵
+    map.set(keyOf(r.market, r.symbol), price);
+    n++;
+  }
+  return n;
+}
 
 const FLUSH_INTERVAL_MS = Number(process.env.LAST_PRICE_FLUSH_MS ?? 30_000);
 
