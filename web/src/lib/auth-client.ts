@@ -2,11 +2,11 @@
 // 게스트(anonymous)·소셜 로그인 메서드를 컴포넌트에 노출.
 "use client";
 import { createAuthClient } from "better-auth/react";
-import { anonymousClient } from "better-auth/client/plugins";
+import { anonymousClient, usernameClient } from "better-auth/client/plugins";
 
 export const authClient = createAuthClient({
-  plugins: [anonymousClient()],
+  plugins: [anonymousClient(), usernameClient()],
 });
 
-// signIn.social({ provider }) · signIn.anonymous() · signOut · useSession
+// signIn.social({ provider }) · signIn.username({ username, password }) · signIn.anonymous() · signOut · useSession
 export const { signIn, signOut, useSession } = authClient;

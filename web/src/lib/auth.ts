@@ -2,7 +2,7 @@
 // anonymous 게스트 + nextCookies. env 접근은 전부 런타임 lazy — 키·DB 없이 빌드 통과.
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { anonymous } from "better-auth/plugins";
+import { anonymous, username } from "better-auth/plugins";
 import { nextCookies } from "better-auth/next-js";
 import { drizzle } from "drizzle-orm/neon-serverless";
 import { Pool } from "@neondatabase/serverless";
@@ -12,6 +12,7 @@ import {
   authAccount,
   authVerification,
 } from "@mockstock/shared/schema";
+import { isValidUsername, USERNAME_MIN, USERNAME_MAX } from "./username";
 
 // Neon serverless Pool. 생성만으로는 커넥션을 열지 않고 첫 쿼리 시 lazy 연결 —
 // DATABASE_URL 미설정(빌드/키 없음) 상태에서도 모듈 로드는 안전.
@@ -57,6 +58,14 @@ export const auth = betterAuth({
         // PRD §5.4: 게스트는 도메인 데이터(주문·계좌)를 만들지 않는다 — 게이트가 주문·리그
         // 참여뿐이라 이전할 행이 없다. v1은 의도적으로 no-op(익명 행은 링크 시 기본 삭제).
       },
+    }),
+    // 아이디(username) 로그인 — /sign-in/username. 소문자 정규화·[a-zA-Z0-9_.] 기본.
+    // 가입은 코어 email/password 경로라 이메일이 필요 → 로그인 폼이 아이디로 합성 이메일을 만들어 전달.
+    // usernameValidator: 점 위치 제한(선행/후행/연속) — 합성 이메일이 항상 유효하도록(클라와 동일 규칙).
+    username({
+      minUsernameLength: USERNAME_MIN,
+      maxUsernameLength: USERNAME_MAX,
+      usernameValidator: isValidUsername,
     }),
     // nextCookies는 반드시 마지막 플러그인 — set-cookie를 Next 라우트/서버액션에 자동 전파.
     nextCookies(),

@@ -41,6 +41,10 @@ export const users = pgTable("users", {
   // Better Auth user 모델 필수 필드(T03). 봇/게스트 시드는 default로 흡수.
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  // Better Auth username 플러그인 — 아이디 로그인. username=정규화(소문자) 유니크 키,
+  // displayUsername=원본 표기. 봇·게스트·기존 유저는 NULL(유니크는 NULL 다중 허용).
+  username: text("username").unique(),
+  displayUsername: text("display_username"),
   isBot: boolean("is_bot").notNull().default(false),
   // Better Auth anonymous 플러그인의 isAnonymous 필드와 정합(게스트 세션). 정식 로그인 전환 시 false로 승격.
   isAnonymous: boolean("is_anonymous").notNull().default(false),
