@@ -16,6 +16,11 @@ export function envInt(name: string, def: number): number {
 }
 
 const TOKEN_TTL_MS = 24 * 60 * 60 * 1_000; // access_token 24h 캐시(KIS 발급 주기와 동일)
+// 레이트 간격 지터 여유(ms). setTimeout은 **늦게만** 발화(정시·조기 아님) — 예약 시각 기준으로
+// 정확히 1000/RPS 간격을 잡아도, 이른 슬롯의 발화 지연 + 늦은 슬롯의 정시 발화가 실제 도착을
+// 압축해 KIS의 1초 창(경계 포함)에 RPS+1건이 몰릴 수 있다(실측 필요 여유 ≈수십 ms).
+// 예약 간격에 이 여유를 더해 지터가 창을 넘겨도 RPS 불변식이 유지되게 한다. env로 승격 가능.
+const KIS_REST_JITTER_MS = 50;
 const REISSUE_THROTTLE_MS = 60_000; // 재발급 1분 스로틀 — EGW00133(1분내 재발급 거부) 가드
 const TOKEN_PATH = "/oauth2/tokenP";
 const DAILY_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"; // FHKST03010100
@@ -83,11 +88,19 @@ async function getToken(): Promise<string> {
 }
 
 function restIntervalMs(): number {
-  return 1_000 / envInt("KIS_REST_RPS", 2);
+  // 버그 원인: interval=1000/RPS(=500ms@2)면 예약 슬롯 0·500·1000ms 세 콜이 KIS의 경계 포함
+  // 1초 창 [0,1000]에 들어가 RPS를 1건 초과 → EGW00201("초당 거래건수 초과", HTTP 500).
+  // 수정: RPS 콜이 1000ms를 **초과** 벌어지도록 올림 + 지터 여유. setTimeout 늦은 발화가 실제
+  // 도착을 압축해도 어떤 1초 창에 최대 RPS건만 들게 한다(전 콜이 단일 throttle 경유 — 전역 불변식).
+  return Math.floor(1_000 / envInt("KIS_REST_RPS", 2)) + KIS_REST_JITTER_MS;
 }
 
-/** KIS_REST_RPS 기반 최소 간격 직렬화 — 초당 호출 수 상한(토큰버킷 등가, 버스트 없음). */
-async function throttle(): Promise<void> {
+/**
+ * KIS_REST_RPS 기반 최소 간격 직렬화 — 초당 호출 수 상한(토큰버킷 등가, 버스트 없음).
+ * export는 레이트 자기검증 테스트 전용(candles.test.ts) — 동시 체인이 몰려도 어떤 1초 창에도
+ * 최대 RPS건만 통과하는지 검증한다.
+ */
+export async function throttle(): Promise<void> {
   const interval = restIntervalMs();
   const now = Date.now();
   const at = Math.max(now, nextCallAt);

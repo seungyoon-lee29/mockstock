@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { TtlCache, krDailyRange, krMinuteRange, mergeEntries } from "./backfillRoute";
-import { fetchKrDaily, _resetKisRestForTest } from "./kisRest";
+import { fetchKrDaily, throttle, _resetKisRestForTest } from "./kisRest";
 import { fetchUsMinutes } from "./alpaca";
 
 const jsonRes = (body: unknown) =>
@@ -32,6 +32,38 @@ function clearKisEnv(): void {
   delete process.env.KIS_REST_RPS;
   _resetKisRestForTest();
 }
+
+// ── 레이트 리미터 자기검증(EGW00201 회귀 방지) ─────────────────────────────
+// 버그: interval=1000/RPS(=500ms@2)면 0·500·1000ms 세 콜이 경계 포함 1초 창에 들어가 KIS가
+// "초당 거래건수 초과"(EGW00201)로 거부. 동시 백필 체인이 몰려도 어떤 1초 창에도 최대 RPS건만
+// 통과해야 한다. RPS=2로 26콜(동시 2체인×13)을 실제 시각으로 발사, 경계 포함 1초 창 최대치를 검증.
+test("throttle — 동시 체인 버스트에도 어떤 1초 창에 최대 RPS건(EGW00201 방지)", async () => {
+  const RPS = 2;
+  process.env.KIS_REST_RPS = String(RPS);
+  _resetKisRestForTest();
+  try {
+    const fires: number[] = [];
+    const chain = async () => {
+      for (let i = 0; i < 13; i++) {
+        await throttle();
+        fires.push(Date.now());
+      }
+    };
+    await Promise.all([chain(), chain()]); // 스트릭트모드 이중마운트/두 탭 = 겹친 체인
+    fires.sort((a, b) => a - b);
+    let maxInWindow = 0;
+    for (let i = 0; i < fires.length; i++) {
+      let c = 0;
+      for (let j = 0; j < fires.length; j++) if (fires[j] >= fires[i] && fires[j] <= fires[i] + 1_000) c++;
+      maxInWindow = Math.max(maxInWindow, c); // 경계 포함(≤) — KIS 카운팅 최악 케이스
+    }
+    assert.ok(maxInWindow <= RPS, `1초 창 최대 ${maxInWindow}건 — RPS=${RPS} 초과(EGW00201 재발)`);
+    assert.equal(fires.length, 26); // 전부 통과(드롭 없음)
+  } finally {
+    delete process.env.KIS_REST_RPS;
+    _resetKisRestForTest();
+  }
+});
 
 // ── TtlCache ─────────────────────────────────────────────────────────────────
 test("TtlCache — 적중·만료·LRU 축출", () => {
