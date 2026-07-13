@@ -18,11 +18,14 @@ export function QuoteCard({
   entry,
   quote,
   rank,
+  marketCap,
 }: {
   entry: UniverseEntry;
   quote?: Quote;
   /** 인기 순위(1..N). 없으면 뱃지 미표시(검색 결과 등). */
   rank?: number;
+  /** 라이브 시총 표기(computeMarketCap→formatMarketCap). 표시 전용. 미상·미전달이면 미표시. */
+  marketCap?: string;
 }) {
   return (
     <Link
@@ -50,6 +53,7 @@ export function QuoteCard({
           <div className="truncate font-semibold">{entry.name}</div>
           <div className="text-xs text-muted-foreground">
             {entry.symbol} · {entry.market === "KR" ? "KOSPI" : "US"}
+            {marketCap != null && <> · 시총 {marketCap}</>}
           </div>
         </div>
       </div>

@@ -10,10 +10,13 @@ import { useQuery } from "@tanstack/react-query";
 import { UNIVERSE, searchUniverse, getEntry, keyOf, type Market } from "@mockstock/shared";
 import { usePrices } from "@/lib/market/usePrices";
 import { rankOrder, RERANK_INTERVAL_MS } from "@/lib/market/discover-rank";
+import type { BaselineMap } from "@/lib/market/baseline";
+import { computeMarketCap, formatMarketCap } from "@/lib/market/format";
 import { QuoteCard } from "@/components/market/quote-card";
 import { Input } from "@/components/ui/input";
 
 const POPULAR_ENDPOINT = "/api/discover/popular";
+const BASELINE_ENDPOINT = "/api/quotes/baseline";
 
 // /api/discover/popular 응답 계약 미러 (라우트 파일은 서버 전용이라 타입 임포트 금지).
 interface PopularItem {
@@ -39,6 +42,29 @@ export function Discover({ market }: { market: Market }) {
   const searchEntries = useMemo(() => (q ? searchUniverse(q) : []), [q]);
   const entries = q ? searchEntries : leagueEntries;
   const quotes = usePrices(entries);
+
+  // 라이브 시총용 상장주식수(sharesOutstanding). 정적 펀더멘털이라 틱과 분리 — 전 유니버스 맵.
+  // 키리스 로컬·미적재면 shares null → 시총 "—". usePrices도 같은 엔드포인트를 쓰지만 노출을 안 해
+  // 여기서 별도 조회(서버 30s 캐시가 중복 비용 흡수 — ponytail: 공유 훅 리팩터 생략).
+  const { data: baseline } = useQuery({
+    queryKey: ["baseline-caps"],
+    queryFn: async ({ signal }): Promise<BaselineMap> => {
+      const res = await fetch(BASELINE_ENDPOINT, { signal });
+      if (!res.ok) throw new Error("기준선을 불러오지 못했습니다");
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+
+  // 라이브 시총 문자열(표시 전용). shares 미상·가격 미도착이면 "—".
+  const capOf = (e: (typeof entries)[number]): string => {
+    const k = keyOf(e.market, e.symbol);
+    const price = quotes[k]?.price ?? 0;
+    return formatMarketCap(
+      computeMarketCap(baseline?.[k]?.sharesOutstanding, price),
+      e.currency,
+    );
+  };
 
   const { data: popular } = useQuery({
     queryKey: ["discover-popular", league],
@@ -115,6 +141,7 @@ export function Discover({ market }: { market: Market }) {
                 key={keyOf(e.market, e.symbol)}
                 entry={e}
                 quote={quotes[keyOf(e.market, e.symbol)]}
+                marketCap={capOf(e)}
               />
             ))}
           </div>
@@ -127,6 +154,7 @@ export function Discover({ market }: { market: Market }) {
               entry={e}
               quote={quotes[keyOf(e.market, e.symbol)]}
               rank={i + 1}
+              marketCap={capOf(e)}
             />
           ))}
         </div>
