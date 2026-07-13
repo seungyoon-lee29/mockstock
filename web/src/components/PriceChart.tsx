@@ -2,14 +2,17 @@
 
 // 리플레이·종목상세 공용 가격 차트 래퍼(lightweight-charts v5). 데이터 주입형 — fetch 안 함.
 // 색은 PRICE_COLORS(상승 빨강/하락 파랑)와 --color-brand(시안) 토큰만 경유(색상 리터럴 금지).
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   createChart,
   ColorType,
   CandlestickSeries,
+  HistogramSeries,
   TickMarkType,
   type ISeriesApi,
   type CandlestickData,
+  type HistogramData,
+  type MouseEventParams,
   type Time,
 } from "lightweight-charts";
 import {
@@ -43,10 +46,30 @@ function toChartColor(raw: string): string | undefined {
   }
 }
 
+/**
+ * 정규화된 색(toChartColor 결과: #hex 또는 rgb(...))을 저알파 rgba 문자열로.
+ * canvas가 준 값만 받으므로 파싱 실패는 없다 — 그래도 못 뽑으면 원색 그대로 반환.
+ */
+function toRgba(color: string, alpha: number): string {
+  const m = color.match(/^#([0-9a-f]{6})$/i);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  }
+  const rgb = color.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);
+  if (rgb) return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${alpha})`;
+  return color;
+}
+
 type PriceChartProps = {
   /** 접근성 라벨용 심볼. 데이터는 props로만 주입한다. */
   symbol?: string;
   data: CandlestickData<Time>[];
+  /**
+   * 거래량 오버레이 히스토그램 데이터. 미지정/빈 배열이면 거래량 시리즈를 아예 만들지 않는다
+   * (리플레이 등 미전달 호출부 무영향). time은 data와 같은 축·색은 캔들 방향(상승 빨강/하락 파랑).
+   */
+  volumes?: HistogramData<Time>[];
   /** 타임프레임 — 분봉 tf면 x축에 시각(HH:mm) 표시. 미지정 시 기존 동작(날짜만). */
   timeframe?: ChartTimeframe;
   /** 시장 — 분봉 x축·크로스헤어를 시장 tz(KST/ET)로 표기. 미지정 시 라이브러리 기본(UTC). */
@@ -58,9 +81,13 @@ type PriceChartProps = {
   className?: string;
 };
 
+// OHLC 레전드 한 줄 상태(크로스헤어 바 or 마지막 바). currency 있으면 formatPrice, 없으면 원값.
+type Ohlc = { open: number; high: number; low: number; close: number };
+
 export function PriceChart({
   symbol,
   data,
+  volumes,
   timeframe,
   market,
   currency,
@@ -69,10 +96,14 @@ export function PriceChart({
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const [legend, setLegend] = useState<Ohlc | null>(null);
 
   // 분봉↔일봉 카테고리 — Time 타입(UTCTimestamp vs "YYYY-MM-DD" 문자열)이 한 시리즈에 섞이면
   // lightweight-charts가 throw한다. 카테고리 전환 시 차트·시리즈를 재생성한다(생성 effect deps).
   const isMinute = timeframe != null && timeframe in TF_MINUTES;
+  // 거래량 시리즈 유무만 재생성 트리거로 — 값 변화는 update effect가 처리(리플레이 무영향).
+  const hasVolume = (volumes?.length ?? 0) > 0;
 
   // 차트 + 시리즈 생성/파기. 타입·tf 카테고리·통화 변경 시에만 재생성. 앱은 다크 고정이라 테마 런타임 반응 생략.
   // ponytail: 라이트/다크 토글이 생기면 테마를 deps에 추가.
@@ -89,6 +120,10 @@ export function PriceChart({
       toChartColor(cs.getPropertyValue("--color-brand").trim()) ??
       PRICE_COLORS.up;
 
+    // 그리드: axisColor(정규화된 hex/rgb)를 저알파 rgba로 — TradingView식 은은한 격자.
+    // toChartColor가 준 rgb(...)면 rgba로, #hex면 canvas가 rgb로 재직렬화하므로 폴백은 skip.
+    const gridColor = toRgba(axisColor, 0.08);
+
     // 차트 내부 예외(색 파싱 등)가 useEffect 밖으로 새면 React가 트리 전체를 언마운트한다 —
     // 차트만 생략하고 페이지는 살린다(a0 §1).
     let chart: ReturnType<typeof createChart> | null = null;
@@ -101,8 +136,8 @@ export function PriceChart({
           attributionLogo: false,
         },
         grid: {
-          vertLines: { visible: false },
-          horzLines: { visible: false },
+          vertLines: { color: gridColor },
+          horzLines: { color: gridColor },
         },
         rightPriceScale: { borderVisible: false },
         timeScale: {
@@ -144,6 +179,33 @@ export function PriceChart({
       });
       s.setData(data);
       seriesRef.current = s;
+
+      // 거래량 오버레이 — 자체 price scale(priceScaleId: "")에 하단 20%로 고정(scaleMargins).
+      // volumes 미전달/빈 배열이면 시리즈를 만들지 않는다(리플레이 등 무영향).
+      // ponytail: 라이브 분봉의 v는 tick 카운트(실거래량 아님) — 일·주·월봉 v만 KIS/Alpaca 실거래량.
+      if (volumes && volumes.length > 0) {
+        const vs = chart.addSeries(HistogramSeries, {
+          priceScaleId: "",
+          priceFormat: { type: "volume" },
+          lastValueVisible: false,
+          priceLineVisible: false,
+        });
+        vs.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+        vs.setData(volumes);
+        volumeRef.current = vs;
+      }
+
+      // OHLC 레전드: 크로스헤어가 바 위면 그 바를 상태로. 벗어나면 null → 렌더에서 마지막 바로 폴백
+      // (마지막 바 폴백을 렌더 파생값으로 두면 effect 안 동기 setState가 없어져 cascading render 회피).
+      const onMove = (param: MouseEventParams<Time>) => {
+        const bar = param.seriesData.get(s) as CandlestickData<Time> | undefined;
+        setLegend(
+          bar ? { open: bar.open, high: bar.high, low: bar.low, close: bar.close } : null,
+        );
+      };
+      // chart.remove()가 구독까지 정리하므로 별도 unsubscribe 불필요(cleanup의 chart?.remove()).
+      chart.subscribeCrosshairMove(onMove);
+
       chart.timeScale().fitContent();
     } catch (err) {
       console.error("[PriceChart] 차트 생성 실패 — 차트만 생략:", err);
@@ -154,34 +216,69 @@ export function PriceChart({
       }
       chart = null;
       seriesRef.current = null;
+      volumeRef.current = null;
     }
 
     return () => {
       chart?.remove();
       seriesRef.current = null;
+      volumeRef.current = null;
     };
-    // data는 아래 별도 effect가 setData로 갱신 → 데이터 변경 시 차트 재생성 안 함(리플레이 스트리밍 대비).
+    // data/volumes는 아래 별도 effect가 setData로 갱신 → 데이터 변경 시 차트 재생성 안 함(리플레이 스트리밍 대비).
     // isMinute(tf 카테고리)는 deps 필수 — 분↔일 전환 시 재생성해야 Time 타입이 안 섞인다.
+    // hasVolume은 거래량 시리즈 유무가 바뀔 때만 재생성(데이터 값 변화는 update effect가 처리).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isMinute, currency, market]);
+  }, [isMinute, currency, market, hasVolume]);
 
-  // 데이터 주입 갱신.
+  // 데이터 주입 갱신(캔들+거래량). 차트 재생성 없이 setData만 — 리플레이 스트리밍 대비.
   useEffect(() => {
     try {
       seriesRef.current?.setData(data);
+      if (volumes && volumes.length > 0) volumeRef.current?.setData(volumes);
     } catch (err) {
       console.error("[PriceChart] 데이터 반영 실패 — 이번 갱신만 생략:", err);
     }
-  }, [data]);
+  }, [data, volumes]);
+
+  // 표시 바: 크로스헤어 바(legend) 없으면 마지막 바로 폴백(effect 밖 렌더 파생 — 동기 setState 회피).
+  const lastBar = data.length ? data[data.length - 1] : null;
+  const bar: Ohlc | null =
+    legend ??
+    (lastBar
+      ? { open: lastBar.open, high: lastBar.high, low: lastBar.low, close: lastBar.close }
+      : null);
+  // 상승/하락 색: 종가≥시가면 up(빨강), 아니면 down(파랑). PRICE_COLORS만 사용(리터럴 금지).
+  const legendColor = bar && bar.close >= bar.open ? PRICE_COLORS.up : PRICE_COLORS.down;
+  const fmt = (v: number) => (currency ? formatPrice(v, currency) : String(v));
 
   // text-foreground: 축 텍스트 색의 원천(currentColor) — muted는 다크에서 저대비.
+  // relative 래퍼: OHLC 레전드를 차트 위에 절대배치. 차트 컨테이너는 래퍼를 꽉 채워 autoSize 유지.
   return (
-    <div
-      ref={containerRef}
-      role="img"
-      aria-label={symbol ? `${symbol} 가격 차트` : "가격 차트"}
-      style={{ height }}
-      className={cn("w-full text-foreground", className)}
-    />
+    <div className={cn("relative w-full text-foreground", className)} style={{ height }}>
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label={symbol ? `${symbol} 가격 차트` : "가격 차트"}
+        className="h-full w-full"
+      />
+      {bar && (
+        // pointer-events-none: 크로스헤어 이벤트를 먹지 않도록. 라벨(시/고/저/종)은 한국어.
+        <div className="pointer-events-none absolute left-2 top-2 flex gap-x-3 text-xs tabular-nums">
+          {(
+            [
+              ["시", bar.open],
+              ["고", bar.high],
+              ["저", bar.low],
+              ["종", bar.close],
+            ] as const
+          ).map(([label, value]) => (
+            <span key={label}>
+              <span className="text-muted-foreground">{label} </span>
+              <span style={{ color: legendColor }}>{fmt(value)}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

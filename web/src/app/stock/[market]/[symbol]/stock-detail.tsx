@@ -4,8 +4,14 @@
 // 토글: 분▾(1·5·10·15·30·60분봉) · 일 · 주 · 월 — 캔들은 useCandles(tf)가
 // 백필+라이브 병합까지 담당(계약: 분봉=IntradayCandle[](time=초), 일·주·월=DailyCandle[](date 문자열)).
 import { useMemo, useState } from "react";
-import type { CandlestickData, Time, UTCTimestamp } from "lightweight-charts";
-import { keyOf, TF_MINUTES, type ChartTimeframe, type UniverseEntry } from "@mockstock/shared";
+import type { CandlestickData, HistogramData, Time, UTCTimestamp } from "lightweight-charts";
+import {
+  keyOf,
+  PRICE_COLORS,
+  TF_MINUTES,
+  type ChartTimeframe,
+  type UniverseEntry,
+} from "@mockstock/shared";
 import { ChevronDownIcon } from "lucide-react";
 import { usePrices } from "@/lib/market/usePrices";
 import { useCandles } from "@/lib/market/useCandles";
@@ -23,6 +29,12 @@ import { cn } from "@/lib/utils";
 import { OrderPanel } from "./order-panel";
 
 const CHART_HEIGHT = 360;
+
+// 거래량 막대색 — PRICE_COLORS(상승 빨강/하락 파랑)에 알파 접미사(8자리 hex)로 저투명.
+// 캔들 위 오버레이라 반투명해야 가독성 유지. 리터럴 색 금지 규칙: 단일 소스 hex에서 파생.
+const VOLUME_ALPHA = "59"; // ~35% (0x59/0xff)
+const VOLUME_UP = PRICE_COLORS.up + VOLUME_ALPHA;
+const VOLUME_DOWN = PRICE_COLORS.down + VOLUME_ALPHA;
 
 // 분▾ 드롭다운 항목 — 라벨은 TF_MINUTES(단일 소스)에서 파생(매직 라벨 산재 금지).
 type MinuteTf = keyof typeof TF_MINUTES;
@@ -63,6 +75,18 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
           ? { time: c.date as Time, open: c.o, high: c.h, low: c.l, close: c.c }
           : { time: c.time as UTCTimestamp, open: c.o, high: c.h, low: c.l, close: c.c },
       ),
+    [raw],
+  );
+
+  // 거래량 오버레이 — 캔들과 같은 time 축, 색은 방향(상승 빨강/하락 파랑) + 저알파로 캔들 가독성 유지.
+  // ponytail: 라이브 분봉의 v는 tick 카운트(실거래량 아님) — 일·주·월봉 v만 KIS/Alpaca 실거래량.
+  const volumes = useMemo<HistogramData<Time>[]>(
+    () =>
+      raw.map((c) => ({
+        time: ("date" in c ? c.date : c.time) as Time,
+        value: c.v,
+        color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN,
+      })),
     [raw],
   );
 
@@ -132,6 +156,7 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
             <PriceChart
               symbol={entry.symbol}
               data={candles}
+              volumes={volumes}
               timeframe={tf}
               market={entry.market}
               currency={entry.currency}
