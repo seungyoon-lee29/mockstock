@@ -1,34 +1,56 @@
 // 리플레이(과거장 훈련소) 순수 로직 — 클라이언트 로컬 재생·로컬 체결(PRD §5.3).
 // 실계좌 체결(fillOrder/DB)과 분리된 훈련 모드라 여기서는 DB를 쓰지 않는다(성적만 replay_sessions에 기록).
-// 정적 JSON은 public/replay/<scenario>/ 아래. 시나리오 v1은 1개(2020 코로나 폭락).
+// 정적 JSON은 public/replay/<scenario>/ 아래. 시나리오 레지스트리가 단일 소스(경로·id 리터럴 산재 금지).
 import {
   SEED_MONEY_KRW,
   aggregateDailyToWeekly,
   aggregateDailyToMonthly,
   type DailyCandle,
+  type IntradayCandle,
 } from "@mockstock/shared";
 
-// ── 시나리오·데이터 위치 (단일 소스, 경로 리터럴 산재 금지) ──────────────────────
-export const REPLAY_SCENARIO_ID = "covid-2020";
+// ── 시나리오 레지스트리 (단일 소스, 경로·id 리터럴 산재 금지) ──────────────────────
+// granularity: "day"=DailyCandle(date)·일/주/월 토글, "minute"=IntradayCandle(time epoch)·전체 재생.
+export type ReplayGranularity = "day" | "minute";
+export type ReplayScenario = { id: string; label: string; granularity: ReplayGranularity };
+export const REPLAY_SCENARIOS: readonly ReplayScenario[] = [
+  { id: "recent-daily", label: "최근 시장 (일봉)", granularity: "day" },
+  { id: "recent-3d-minute", label: "최근 3거래일 (분봉)", granularity: "minute" },
+];
+export const REPLAY_DEFAULT_SCENARIO_ID = REPLAY_SCENARIOS[0].id;
+export function findScenario(id: string | null | undefined): ReplayScenario {
+  return REPLAY_SCENARIOS.find((s) => s.id === id) ?? REPLAY_SCENARIOS[0];
+}
+/** scenarioId 신뢰 경계 검증 — API가 임의 id를 DB에 쓰지 않도록. */
+export function isValidScenarioId(id: unknown): id is string {
+  return typeof id === "string" && REPLAY_SCENARIOS.some((s) => s.id === id);
+}
 export const manifestUrl = (scenario: string) => `/replay/${scenario}/manifest.json`;
 export const candleUrl = (scenario: string, symbol: string) =>
   `/replay/${scenario}/${symbol}.json`;
 
-// ── 재생 속도 정책(§5.3 x1/x10/x30). 간격 = base/speed → 배속이 클수록 하루 간격이 짧다. ──
+// ── 재생 속도 정책(§5.3 x1/x10/x30). 간격 = base/speed → 배속이 클수록 스텝 간격이 짧다. ──
 export const REPLAY_SPEEDS = [1, 10, 30] as const;
 export type ReplaySpeed = (typeof REPLAY_SPEEDS)[number];
 export const REPLAY_DEFAULT_SPEED: ReplaySpeed = 30;
-// ponytail: x30에서 재생 구간 ≈ 2분(PRD §12). 체감 조정 시 이 상수만 손대면 된다.
-export const REPLAY_BASE_STEP_MS = 24_000;
-export const stepIntervalMs = (speed: number) => REPLAY_BASE_STEP_MS / speed;
+// base는 granularity별로 다르다 — 한 세션 재생이 비슷한 벽시계(≈2분@x30)가 되도록.
+//  일봉: 185일 × (24000/30=800ms) ≈ 2.5분.  분봉: 1170봉 × (3000/30=100ms) ≈ 2분.
+// 같은 base면 분봉(봉 수 ~6배)은 x30에서도 ~15분이 걸린다(캔들당 스텝이라).
+export const REPLAY_BASE_STEP_MS = 24_000; // 일봉
+export const MINUTE_BASE_STEP_MS = 3_000; // 분봉
+export const stepIntervalMs = (speed: number, granularity: ReplayGranularity = "day") =>
+  (granularity === "minute" ? MINUTE_BASE_STEP_MS : REPLAY_BASE_STEP_MS) / speed;
 
 // ── 데이터 타입 ──────────────────────────────────────────────────────────────
-// 정본은 shared `DailyCandle`(일→주봉 집계와 계약 공유). 기존 importer 호환 위해 별칭 유지.
+// day 시나리오는 shared `DailyCandle`(일→주봉 집계와 계약 공유). 기존 importer 호환 위해 별칭 유지.
+// minute 시나리오는 shared `IntradayCandle`(time=epoch 초).
 export type Candle = DailyCandle;
+export type MinuteCandle = IntradayCandle;
 export type ReplayManifest = {
   id: string;
   name: string;
   description: string;
+  granularity: ReplayGranularity;
   dataPeriod: { start: string; end: string; note?: string };
   playPeriod: { start: string; end: string };
   reportTailPeriod?: { start: string; end: string };
@@ -61,6 +83,12 @@ export function visibleSeries(
   if (timeframe === "week") return aggregateDailyToWeekly(visible);
   if (timeframe === "month") return aggregateDailyToMonthly(visible);
   return visible;
+}
+
+// 분봉 표시 — 집계 없음(1분 그대로). 미래 누설 금지 불변식: 커서까지만 자른다.
+// 분봉은 전체 배열을 index로 재생하므로 완주 후 tail 공개도 없다(reportTailPeriod 미사용).
+export function visibleMinutes(candles: MinuteCandle[], cursor: number): MinuteCandle[] {
+  return candles.slice(0, cursor + 1);
 }
 
 // ── 로컬 계좌·체결 (시드·현금·포지션). 매수/매도는 현금/보유의 비중(0~1)으로 조작. ──

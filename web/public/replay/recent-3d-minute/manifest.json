@@ -1,0 +1,39 @@
+{
+  "id": "recent-3d-minute",
+  "name": "최근 3거래일 (분봉)",
+  "description": "최근 3거래일 1분봉을 재생하며 초단기 매매를 훈련합니다.",
+  "granularity": "minute",
+  "dataPeriod": {
+    "start": "2026-07-08",
+    "end": "2026-07-10"
+  },
+  "playPeriod": {
+    "start": "2026-07-08",
+    "end": "2026-07-10"
+  },
+  "symbols": {
+    "US": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "GOOGL",
+      "AMZN",
+      "META",
+      "TSLA",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "JPM",
+      "V",
+      "DIS",
+      "KO",
+      "UBER",
+      "SBUX"
+    ]
+  },
+  "source": {
+    "provider": "Alpaca",
+    "note": "data.alpaca.markets /v2/stocks/{sym}/bars 1Min feed=iex adjustment=split",
+    "fetchedAt": "2026-07-13"
+  }
+}

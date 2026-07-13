@@ -17,8 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPrice, formatPct } from "@/lib/market/format";
+import { formatMarketDate, formatMarketTime } from "@/lib/market/candleServe";
 import {
-  REPLAY_SCENARIO_ID,
   REPLAY_SPEEDS,
   REPLAY_DEFAULT_SPEED,
   manifestUrl,
@@ -32,12 +32,13 @@ import {
   sell,
   returnPct,
   maxDrawdown,
-  buyAndHoldReturnPct,
   savePendingReplay,
   loadPendingReplay,
   clearPendingReplay,
   visibleSeries,
+  visibleMinutes,
   type Candle,
+  type MinuteCandle,
   type ReplayManifest,
   type ReplayAccount,
   type Timeframe,
@@ -59,8 +60,16 @@ const TIMEFRAMES = [
   { id: "month", label: "월" },
 ] as const satisfies readonly { id: Timeframe; label: string }[];
 
-export function ReplayPlayer({ symbol }: { symbol: string }) {
-  const [data, setData] = useState<{ manifest: ReplayManifest; candles: Candle[] } | null>(null);
+// 캔들은 시나리오 granularity에 따라 DailyCandle[] 또는 IntradayCandle[]. 매니페스트로 판별.
+type AnyCandles = Candle[] | MinuteCandle[];
+
+// 분봉 커서 라벨 — 시장 tz로 "날짜 HH:mm"(일봉의 date 문자열 자리 대체).
+function formatMinuteLabel(market: Market, timeSec: number): string {
+  return `${formatMarketDate(market, timeSec)} ${formatMarketTime(market, timeSec)}`;
+}
+
+export function ReplayPlayer({ symbol, scenarioId }: { symbol: string; scenarioId: string }) {
+  const [data, setData] = useState<{ manifest: ReplayManifest; candles: AnyCandles } | null>(null);
   const [error, setError] = useState(false);
 
   // 로그인 왕복 후 복귀(§194): 보존된 게스트 결과를 감지해 한 번만 재제출. 멱등키(id)로 서버가
@@ -92,17 +101,17 @@ export function ReplayPlayer({ symbol }: { symbol: string }) {
   useEffect(() => {
     let live = true;
     Promise.all([
-      fetch(manifestUrl(REPLAY_SCENARIO_ID)).then((r) => (r.ok ? r.json() : Promise.reject())),
-      fetch(candleUrl(REPLAY_SCENARIO_ID, symbol)).then((r) => (r.ok ? r.json() : Promise.reject())),
+      fetch(manifestUrl(scenarioId)).then((r) => (r.ok ? r.json() : Promise.reject())),
+      fetch(candleUrl(scenarioId, symbol)).then((r) => (r.ok ? r.json() : Promise.reject())),
     ])
-      .then(([manifest, candles]: [ReplayManifest, Candle[]]) => {
+      .then(([manifest, candles]: [ReplayManifest, AnyCandles]) => {
         if (live) setData({ manifest, candles });
       })
       .catch(() => live && setError(true));
     return () => {
       live = false;
     };
-  }, [symbol]);
+  }, [symbol, scenarioId]);
 
   if (error) {
     return (
@@ -126,17 +135,27 @@ export function ReplayPlayer({ symbol }: { symbol: string }) {
       </div>
     );
   }
-  return <ReplaySession key={symbol} symbol={symbol} manifest={data.manifest} candles={data.candles} />;
+  return (
+    <ReplaySession
+      key={symbol}
+      symbol={symbol}
+      scenarioId={scenarioId}
+      manifest={data.manifest}
+      candles={data.candles}
+    />
+  );
 }
 
 function ReplaySession({
   symbol,
+  scenarioId,
   manifest,
   candles,
 }: {
   symbol: string;
+  scenarioId: string;
   manifest: ReplayManifest;
-  candles: Candle[];
+  candles: AnyCandles;
 }) {
   // 리플레이 시드는 시나리오 자체 단위(PRD §5.3) — 종목 시장의 통화 하나로 통일.
   const market: Market =
@@ -144,18 +163,32 @@ function ReplaySession({
   const currency: Currency = market === "KR" ? "KRW" : "USD";
   const seed = SEED_MONEY[market];
 
+  // granularity별 재생 범위·표시. day=DailyCandle(date)·일/주/월 토글·날짜 기반 play 구간.
+  // minute=IntradayCandle(time epoch)·전체 배열 재생(0..last)·집계 없음·주/월 토글 숨김.
+  const isMinute = manifest.granularity === "minute";
+  const dailyCandles = candles as Candle[];
+  const minuteCandles = candles as MinuteCandle[];
+
+  // 캔들 종가/시가/라벨 접근자(index 기반) — 매매·성적 로직이 granularity 무관하게 재사용.
+  const closeAt = (i: number): number => (isMinute ? minuteCandles[i].c : dailyCandles[i].c);
+  const openAt = (i: number): number => (isMinute ? minuteCandles[i].o : dailyCandles[i].o);
+  const labelAt = (i: number): string =>
+    isMinute ? formatMinuteLabel(market, minuteCandles[i].time) : dailyCandles[i].date;
+
   const playStart = useMemo(
-    () => firstIndexOnOrAfter(candles, manifest.playPeriod.start),
-    [candles, manifest],
+    () => (isMinute ? 0 : firstIndexOnOrAfter(dailyCandles, manifest.playPeriod.start)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candles, manifest, isMinute],
   );
   const playEnd = useMemo(
-    () => lastIndexOnOrBefore(candles, manifest.playPeriod.end),
-    [candles, manifest],
+    () => (isMinute ? candles.length - 1 : lastIndexOnOrBefore(dailyCandles, manifest.playPeriod.end)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [candles, manifest, isMinute],
   );
 
   const [cursor, setCursor] = useState(playStart);
   const [account, setAccount] = useState<ReplayAccount>(() => initAccount(seed));
-  const [curve, setCurve] = useState<number[]>(() => [equityOf(initAccount(seed), candles[playStart].c)]);
+  const [curve, setCurve] = useState<number[]>(() => [equityOf(initAccount(seed), closeAt(playStart))]);
   const [playing, setPlaying] = useState(true);
   const [speed, setSpeed] = useState<number>(REPLAY_DEFAULT_SPEED);
   const [timeframe, setTimeframe] = useState<Timeframe>("day");
@@ -178,15 +211,16 @@ function ReplaySession({
     fetch("/api/replay", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scenarioId: REPLAY_SCENARIO_ID }),
+      body: JSON.stringify({ scenarioId }),
     })
       .then((r) => (r.ok ? r.json() : { id: null }))
       .then((b: { id: string | null }) => (sessionIdRef.current = b.id))
       .catch(() => (sessionIdRef.current = null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const price = candles[cursor].c;
-  const prevClose = candles[cursor - 1]?.c ?? candles[cursor].o;
+  const price = closeAt(cursor);
+  const prevClose = cursor > 0 ? closeAt(cursor - 1) : openAt(cursor);
   const equity = equityOf(account, price);
   const rtnPct = returnPct(equity, seed);
 
@@ -200,14 +234,15 @@ function ReplaySession({
     }
     const next = cur + 1;
     setCursor(next);
-    setCurve((c) => [...c, equityOf(accountRef.current, candles[next].c)]);
+    setCurve((c) => [...c, equityOf(accountRef.current, closeAt(next))]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candles, playEnd]);
 
   useEffect(() => {
     if (!playing || finished) return;
-    const id = setInterval(tick, stepIntervalMs(speed));
+    const id = setInterval(tick, stepIntervalMs(speed, manifest.granularity));
     return () => clearInterval(id);
-  }, [playing, finished, speed, tick]);
+  }, [playing, finished, speed, tick, manifest.granularity]);
 
   // 완주 시 성적 저장(개인 기록만). id 없으면 게스트 → 로그인 CTA.
   useEffect(() => {
@@ -228,22 +263,45 @@ function ReplaySession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
 
-  // 미래 누설 금지: 현재 시점까지만. 완주 후 "이후 보기" 시에만 tail 공개.
-  // 주봉은 커서까지 자른 일봉을 집계하므로(미래 캔들이 애초에 없음) 누설 불변식이 그대로 유지된다.
-  const visible = useMemo(
-    () => visibleSeries(candles, cursor, timeframe, { finished, revealTail }),
-    [candles, cursor, finished, revealTail, timeframe],
-  );
-  const chartData = useMemo<CandlestickData<Time>[]>(
-    () => visible.map((c) => ({ time: c.date as Time, open: c.o, high: c.h, low: c.l, close: c.c })),
-    [visible],
-  );
-  // 거래량 오버레이 — 같은 time 축, 색은 방향(상승 빨강/하락 파랑) + 저알파. 커서까지 자른 visible에서
-  // 파생하므로 미래 누설 불변식 공유(chartData와 동일 소스).
-  const volumes = useMemo<HistogramData<Time>[]>(
-    () => visible.map((c) => ({ time: c.date as Time, value: c.v, color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN })),
-    [visible],
-  );
+  // 미래 누설 금지: 현재 시점(cursor)까지만. day는 완주 후 "이후 보기" 시에만 tail 공개.
+  // day 주봉은 커서까지 자른 일봉을 집계하므로 누설 불변식 유지. minute은 집계 없이 커서까지 slice.
+  // 차트 time: day=date 문자열, minute=epoch 초(UTCTimestamp) — PriceChart가 timeframe으로 판별.
+  const chartData = useMemo<CandlestickData<Time>[]>(() => {
+    if (isMinute) {
+      return visibleMinutes(minuteCandles, cursor).map((c) => ({
+        time: c.time as Time,
+        open: c.o,
+        high: c.h,
+        low: c.l,
+        close: c.c,
+      }));
+    }
+    return visibleSeries(dailyCandles, cursor, timeframe, { finished, revealTail }).map((c) => ({
+      time: c.date as Time,
+      open: c.o,
+      high: c.h,
+      low: c.l,
+      close: c.c,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, cursor, finished, revealTail, timeframe, isMinute]);
+  // 거래량 오버레이 — 같은 time 축, 색은 방향(상승 빨강/하락 파랑) + 저알파. 커서까지 자른 소스에서
+  // 파생하므로 미래 누설 불변식 공유(chartData와 동일 커서).
+  const volumes = useMemo<HistogramData<Time>[]>(() => {
+    if (isMinute) {
+      return visibleMinutes(minuteCandles, cursor).map((c) => ({
+        time: c.time as Time,
+        value: c.v,
+        color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN,
+      }));
+    }
+    return visibleSeries(dailyCandles, cursor, timeframe, { finished, revealTail }).map((c) => ({
+      time: c.date as Time,
+      value: c.v,
+      color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candles, cursor, finished, revealTail, timeframe, isMinute]);
 
   function trade(next: ReplayAccount) {
     setAccount(next);
@@ -257,7 +315,7 @@ function ReplaySession({
   function reset() {
     setCursor(playStart);
     setAccount(initAccount(seed));
-    setCurve([equityOf(initAccount(seed), candles[playStart].c)]);
+    setCurve([equityOf(initAccount(seed), closeAt(playStart))]);
     setFinished(false);
     setRevealTail(false);
     setSaveState("idle");
@@ -266,7 +324,7 @@ function ReplaySession({
     fetch("/api/replay", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scenarioId: REPLAY_SCENARIO_ID }),
+      body: JSON.stringify({ scenarioId }),
     })
       .then((r) => (r.ok ? r.json() : { id: null }))
       .then((b: { id: string | null }) => (sessionIdRef.current = b.id))
@@ -279,7 +337,7 @@ function ReplaySession({
   function saveViaLogin(provider: "google") {
     savePendingReplay({
       id: crypto.randomUUID(),
-      scenarioId: REPLAY_SCENARIO_ID,
+      scenarioId,
       returnPct: rtnPct,
       mdd: maxDrawdown(curve),
     });
@@ -309,7 +367,7 @@ function ReplaySession({
         </div>
       </div>
 
-      <div className="mt-2 text-sm text-muted-foreground tabular-nums">{candles[cursor].date}</div>
+      <div className="mt-2 text-sm text-muted-foreground tabular-nums">{labelAt(cursor)}</div>
       <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div className="h-full bg-brand" style={{ width: `${Math.round(progress * 100)}%` }} />
       </div>
@@ -317,7 +375,16 @@ function ReplaySession({
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card>
           <CardContent className="px-2">
-            <PriceChart symbol={symbol} data={chartData} volumes={volumes} market={market} currency={currency} height={360} />
+            <PriceChart
+              symbol={symbol}
+              data={chartData}
+              volumes={volumes}
+              timeframe={isMinute ? "1m" : undefined}
+              market={market}
+              currency={currency}
+              autoFit={isMinute}
+              height={360}
+            />
           </CardContent>
         </Card>
 
@@ -345,18 +412,21 @@ function ReplaySession({
                   </Button>
                 ))}
               </div>
-              <div className="ml-auto flex gap-1">
-                {TIMEFRAMES.map((tf) => (
-                  <Button
-                    key={tf.id}
-                    size="sm"
-                    variant={timeframe === tf.id ? "default" : "ghost"}
-                    onClick={() => setTimeframe(tf.id)}
-                  >
-                    {tf.label}
-                  </Button>
-                ))}
-              </div>
+              {/* 주/월 토글은 일봉 시나리오만 — 분봉은 집계 없이 전체를 1분봉으로 재생. */}
+              {!isMinute && (
+                <div className="ml-auto flex gap-1">
+                  {TIMEFRAMES.map((tf) => (
+                    <Button
+                      key={tf.id}
+                      size="sm"
+                      variant={timeframe === tf.id ? "default" : "ghost"}
+                      onClick={() => setTimeframe(tf.id)}
+                    >
+                      {tf.label}
+                    </Button>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -365,10 +435,11 @@ function ReplaySession({
               rtnPct={rtnPct}
               mdd={maxDrawdown(curve)}
               trades={account.trades}
-              buyHoldPct={buyAndHoldReturnPct(candles, playStart, playEnd)}
+              buyHoldPct={(closeAt(playEnd) / closeAt(playStart) - 1) * 100}
               tailPct={
-                manifest.reportTailPeriod
-                  ? buyAndHoldReturnPct(candles, playEnd, candles.length - 1)
+                // 분봉은 전체를 재생하므로 tail 없음(가드). day만 reportTailPeriod 있으면 꼬리 공개.
+                !isMinute && manifest.reportTailPeriod && playEnd < candles.length - 1
+                  ? (closeAt(candles.length - 1) / closeAt(playEnd) - 1) * 100
                   : null
               }
               revealTail={revealTail}

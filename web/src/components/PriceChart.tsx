@@ -76,6 +76,12 @@ type PriceChartProps = {
   market?: Market;
   /** 지정 시 y축 가격 라벨을 통화 포맷(KRW 정수·USD 2자리, format.ts)으로 표기. */
   currency?: Currency;
+  /**
+   * 데이터 갱신마다 항상 fitContent — 리플레이 분봉처럼 커서가 0봉에서 시작해 매 스텝 +1로 자라는
+   * 스트리밍용. 미지정(기본 false)이면 큰 점프(BACKFILL_FIT_JUMP)에만 재적합해 사용자 줌/팬을 보존한다
+   * (라이브 종목상세 차트). +1씩 자라는 리플레이는 이 게이트에 걸리지 않아 초기 1봉 줌에 고착되므로 필요.
+   */
+  autoFit?: boolean;
   /** 차트 높이(px). */
   height?: number;
   className?: string;
@@ -95,6 +101,7 @@ export function PriceChart({
   timeframe,
   market,
   currency,
+  autoFit = false,
   height = 320,
   className,
 }: PriceChartProps) {
@@ -248,14 +255,15 @@ export function PriceChart({
       // 바 수가 크게 늘면(=뒤늦은 백필 도착, +~200) 보이는 범위를 재적합 — setData는 뷰를 안 넓힌다.
       // 초기 fitContent가 라이브 2봉에만 맞춰진 뒤 240봉 백필이 도착하면 차트가 2봉에 갇히던 버그(a1).
       // +1(분봉 롤오버·리플레이 커서 스텝)은 재적합 안 함 — 사용자 줌/팬·리플레이 재생을 매 스텝 뺏지 않도록.
-      if (chartRef.current && data.length - barCountRef.current >= BACKFILL_FIT_JUMP) {
+      // 단 autoFit(리플레이 분봉: 0봉→누적)은 매 갱신 재적합해 세션이 쌓이는 걸 보여준다.
+      if (chartRef.current && (autoFit || data.length - barCountRef.current >= BACKFILL_FIT_JUMP)) {
         chartRef.current.timeScale().fitContent();
       }
       barCountRef.current = data.length;
     } catch (err) {
       console.error("[PriceChart] 데이터 반영 실패 — 이번 갱신만 생략:", err);
     }
-  }, [data, volumes]);
+  }, [data, volumes, autoFit]);
 
   // 표시 바: 크로스헤어 바(legend) 없으면 마지막 바로 폴백(effect 밖 렌더 파생 — 동기 setState 회피).
   const lastBar = data.length ? data[data.length - 1] : null;

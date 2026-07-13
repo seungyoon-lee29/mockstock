@@ -7,7 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { replaySessions } from "@mockstock/shared/schema";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { REPLAY_SCENARIO_ID } from "@/lib/replay";
+import { isValidScenarioId, REPLAY_DEFAULT_SCENARIO_ID } from "@/lib/replay";
 
 function json(status: number, body: Record<string, unknown>): Response {
   return Response.json(body, { status });
@@ -35,9 +35,8 @@ export async function POST(req: NextRequest): Promise<Response> {
     returnPct?: unknown;
     mdd?: unknown;
   };
-  if (scenarioId !== REPLAY_SCENARIO_ID) {
-    return json(400, { message: "알 수 없는 시나리오입니다." });
-  }
+  // scenarioId는 레지스트리 검증 후에만 DB에 기록(신뢰 경계). 누락/무효면 기본 시나리오로 폴백.
+  const validScenarioId = isValidScenarioId(scenarioId) ? scenarioId : REPLAY_DEFAULT_SCENARIO_ID;
 
   // 게스트→로그인 복귀 후 보존 결과 재제출(§194): 클라 멱등키(id)+결과를 완주 상태로 저장.
   // id를 PK로 삼아 onConflictDoNothing → 새로고침·중복 트리거의 이중 저장 차단(멱등).
@@ -47,7 +46,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       .values({
         id: pendingId,
         userId: session.user.id,
-        scenarioId: REPLAY_SCENARIO_ID,
+        scenarioId: validScenarioId,
         returnPct: toNumeric(returnPct),
         mdd: toNumeric(mdd),
         finishedAt: new Date(),
@@ -59,7 +58,7 @@ export async function POST(req: NextRequest): Promise<Response> {
   const id = crypto.randomUUID();
   await getDb()
     .insert(replaySessions)
-    .values({ id, userId: session.user.id, scenarioId: REPLAY_SCENARIO_ID });
+    .values({ id, userId: session.user.id, scenarioId: validScenarioId });
   return json(201, { id });
 }
 

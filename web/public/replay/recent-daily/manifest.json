@@ -1,0 +1,44 @@
+{
+  "id": "recent-daily",
+  "name": "최근 시장 (일봉)",
+  "description": "최근 약 9개월 실제 일봉을 배속으로 재생하며 훈련합니다. 특정 사건이 아닌 '지금의 시장'입니다.",
+  "granularity": "day",
+  "dataPeriod": {
+    "start": "2025-10-14",
+    "end": "2026-07-10",
+    "note": "warmup 1개월 포함 — 초기 시세 컨텍스트용"
+  },
+  "playPeriod": {
+    "start": "2025-11-14",
+    "end": "2026-05-10"
+  },
+  "reportTailPeriod": {
+    "start": "2026-05-10",
+    "end": "2026-07-10"
+  },
+  "symbols": {
+    "US": [
+      "AAPL",
+      "MSFT",
+      "NVDA",
+      "GOOGL",
+      "AMZN",
+      "META",
+      "TSLA",
+      "AVGO",
+      "AMD",
+      "NFLX",
+      "JPM",
+      "V",
+      "DIS",
+      "KO",
+      "UBER",
+      "SBUX"
+    ]
+  },
+  "source": {
+    "provider": "Alpaca",
+    "note": "data.alpaca.markets /v2/stocks/{sym}/bars 1Day feed=iex adjustment=split",
+    "fetchedAt": "2026-07-13"
+  }
+}
