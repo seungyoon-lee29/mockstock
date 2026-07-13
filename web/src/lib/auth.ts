@@ -34,6 +34,14 @@ export const auth = betterAuth({
       verification: authVerification,
     },
   }),
+  // 이메일+비밀번호 로그인 — 로컬/키 없는 환경에서도 동작(구글 OAuth 리다이렉트 불필요).
+  // 해시(scrypt)·세션은 Better Auth가 처리, 해시 비번은 auth_account.password에 저장.
+  // requireEmailVerification:false — 메일 발송 인프라 없이 가입 즉시 로그인(autoSignIn 기본 true).
+  emailAndPassword: {
+    enabled: true,
+    requireEmailVerification: false,
+    minPasswordLength: 8,
+  },
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID as string,
