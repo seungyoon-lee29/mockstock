@@ -189,7 +189,7 @@ function SeasonBanner({
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3 rounded-xl bg-card px-4 py-4 ring-1 ring-foreground/10">
       <div>
         <p className="text-xs text-muted-foreground">진행 중인 시즌</p>
-        <p className="text-lg font-bold tracking-tight">이번 주 시즌</p>
+        <p className="text-lg font-bold tracking-tight">이번 달 시즌</p>
         <p className="text-xs text-muted-foreground">
           {fmtDay(season.startsAt)} – {fmtDay(season.endsAt)}
         </p>

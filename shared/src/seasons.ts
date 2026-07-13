@@ -33,7 +33,7 @@ type Db = PgDatabase<any, any, any>;
 export interface SeasonConfig {
   /** 시즌 시드 현금(네이티브 통화). 미지정 시 SEED_MONEY[market](리그별 네이티브). */
   seedMoney?: number;
-  /** 지정 시 고정 길이 롤링 시즌(단축 시즌 테스트, §4.1). 미지정 시 주간(KR=월00:00→금15:30 KST, US=월→금16:00 ET). */
+  /** 지정 시 고정 길이 롤링 시즌(단축 시즌 테스트, §4.1). 미지정 시 월간(KR=1일00:00→말일15:30 KST, US=1일→말일16:00 ET). */
   durationMs?: number;
 }
 
@@ -81,23 +81,24 @@ export function weeklyPeriod(market: Market, now: Date): { startsAt: Date; endsA
   // startMondayUtc = 월요일 00:00 KST(= 일요일 15:00 UTC). 금요일 16:00 UTC는 항상 NY에서 금요일임.
   // (금 16:00 UTC = 금 12:00 EDT = 금 11:00 EST — 양쪽 모두 금요일 보장)
   const friAnchor = new Date(startMondayUtc + 4 * DAY_MS + KST_OFFSET_MS + 16 * 60 * 60 * 1000);
-  const endsAt = fridayCloseET(friAnchor);
+  const endsAt = closeET(friAnchor);
   return { startsAt: new Date(startMondayUtc), endsAt };
 }
 
 /**
- * 금요일 정오 UTC 앵커로부터 그날의 미국 동부 16:00(DST 자동)을 UTC Date로 반환.
+ * 정오 UTC 앵커가 가리키는 뉴욕 현지 날짜의 16:00 America/New_York(DST 자동)을 UTC Date로 반환.
+ * 주간(금요일)·월간(말일) 공용 — 앵커일이 EDT/EST 어느 쪽이든 그날 16:00 ET를 산출한다.
  * Intl.DateTimeFormat("en-US", { timeZoneName: "shortOffset" }) 로 "GMT-4"/"GMT-5" 파싱.
  * KST 절대시각 하드코딩 없음 — US 경계는 반드시 tz 계산 경유(rules/worker.md).
  */
-function fridayCloseET(friNoonUtc: Date): Date {
+function closeET(dayNoonUtc: Date): Date {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     timeZoneName: "shortOffset",
-  }).formatToParts(friNoonUtc);
+  }).formatToParts(dayNoonUtc);
   const p: Record<string, string> = {};
   for (const { type, value } of parts) p[type] = value;
   // "GMT-4" → -240분, "GMT-5" → -300분
@@ -112,6 +113,35 @@ function fridayCloseET(friNoonUtc: Date): Date {
   );
 }
 
+/**
+ * 월간(달력월) 시즌 경계 — 기본 시즌 단위.
+ * startsAt = 그 달 1일 00:00 KST(UTC+9 고정 시프트로 y/mo 산출).
+ * endsAt   = 말일 장 마감. KR = 말일 15:30 KST(SEASON_END_*_KST 재사용).
+ *            US = 말일 16:00 America/New_York(closeET로 DST 자동).
+ * 말일 = Date.UTC(y, mo+1, 0)의 날짜 → 연말 롤오버·윤년 2월 자동 처리.
+ * export: 테스트·외부 경계 검증용.
+ */
+export function monthlyPeriod(market: Market, now: Date): { startsAt: Date; endsAt: Date } {
+  const kst = new Date(now.getTime() + KST_OFFSET_MS); // KST 필드를 getUTC*로 읽기 위한 시프트
+  const y = kst.getUTCFullYear();
+  const mo = kst.getUTCMonth();
+  const startsAt = new Date(Date.UTC(y, mo, 1) - KST_OFFSET_MS); // 1일 00:00 KST
+  const lastDay = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+
+  if (market === "KR") {
+    // 말일 15:30 KST = Date.UTC(y, mo, lastDay, 15-9, 30) (SEASON_END_*_KST 재사용).
+    const endsAt = new Date(
+      Date.UTC(y, mo, lastDay, SEASON_END_HOUR_KST - 9, SEASON_END_MINUTE_KST),
+    );
+    return { startsAt, endsAt };
+  }
+
+  // US: 말일 정오 UTC 앵커로 closeET 호출 → 그날 16:00 ET(DST 자동).
+  // 정오 UTC는 EDT/EST 어느 쪽이든 해당 뉴욕 날짜가 말일과 일치(경계 자정 미접근).
+  const lastNoonUtc = new Date(Date.UTC(y, mo, lastDay, 12, 0));
+  return { startsAt, endsAt: closeET(lastNoonUtc) };
+}
+
 /** 현재 시각이 속한 시즌의 결정적 경계 + id. 같은 기간+market엔 항상 같은 id → onConflict 로 멱등 생성. */
 function currentPeriod(now: Date, cfg: SeasonConfig, market: Market): { id: string; startsAt: Date; endsAt: Date } {
   if (cfg.durationMs && cfg.durationMs > 0) {
@@ -122,7 +152,7 @@ function currentPeriod(now: Date, cfg: SeasonConfig, market: Market): { id: stri
       endsAt: new Date(startMs + cfg.durationMs),
     };
   }
-  const { startsAt, endsAt } = weeklyPeriod(market, now);
+  const { startsAt, endsAt } = monthlyPeriod(market, now);
   return { id: `season_${startsAt.toISOString()}:${market}`, startsAt, endsAt };
 }
 
@@ -218,10 +248,10 @@ export async function ensureActiveSeason(db: Db, cfg: SeasonConfig, market: Mark
 }
 
 /**
- * 월요일 리셋 — 신규 시즌 row(멱등) + 직전 시즌 로스터를 신규 시즌으로 이관·시드 재설정.
+ * 월 1일 리셋 — 신규 시즌 row(멱등) + 직전 시즌 로스터를 신규 시즌으로 이관·시드 재설정.
  * 신규 시즌은 per-season이라 포지션 없는 클린 슬레이트 → 재설정은 계좌 현금만 seed 로.
  * 직전 시즌은 같은 market으로 한정 — 교차 리그 로스터 오염 차단.
- * ponytail: 재설정은 매주 크론(장 개장 전) 전제. 멱등 재실행 안전, 개장 후 매매 중 호출은 상정하지 않음.
+ * ponytail: 재설정은 월간 크론(장 개장 전) 전제. 멱등 재실행 안전, 개장 후 매매 중 호출은 상정하지 않음.
  */
 export async function resetSeason(db: Db, cfg: SeasonConfig, market: Market): Promise<SeasonRow> {
   const season = await ensureActiveSeason(db, cfg, market);

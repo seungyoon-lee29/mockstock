@@ -1,6 +1,6 @@
 // 크론 워커 node-cron(Vercel Cron 미사용, B7), 전부 timezone 'Asia/Seoul'(§7.6).
-// 리그별 리셋(월 08:30/22:00) · 리그별 확정 마감창(KR 금 15:35~16:05 / US 토 05:05~06:05 KST) · 일별 스냅샷(15:40)
-// 분봉 prune(매일 04:20) · 각 실행의 완료·실패를 Discord webhook(env DISCORD_WEBHOOK_URL)으로 통지, 없으면 콘솔.
+// 리그별 월간 리셋(매월 1일 KR 08:30 / US 22:00 KST) · 일별 마감 확정 스윕(평일 마감 직후 KR 15:35 / US 06:35 KST)
+// · 일별 스냅샷(15:40) · 분봉 prune(매일 04:20) · 각 실행의 완료·실패를 Discord webhook(env DISCORD_WEBHOOK_URL)으로 통지, 없으면 콘솔.
 // DATABASE_URL 없으면 스케줄 자체를 건너뛴다 — mock 로컬 데모(키 불필요)가 깨지지 않도록.
 import cron from "node-cron";
 import { sql } from "drizzle-orm";
@@ -110,16 +110,25 @@ export function startCron(): void {
   // 키 없으면 내부 no-op(fail-soft). 주간 크론이 이후 slow-drift 갱신.
   void runNotified("상장주식수 부팅 적재", () => syncSharesOutstanding(db, { onlyMissing: true }));
 
-  // ① KR 리셋 — 월 08:30 KST(KR 개장 전). US 리셋 — 월 22:00 KST(≈미 동부 월 09:00 여름 개장 전).
-  cron.schedule("30 8 * * 1", () => void runNotified("KR 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "KR"), "KR")), { timezone: TZ });
-  cron.schedule("0 22 * * 1", () => void runNotified("US 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "US"), "US")), { timezone: TZ });
-  // ② 확정 스윕 — 각 리그 마감창에서만(상시 5분 스윕 금지, Neon 보존 B13). endsAt<=now & active 를 스캔하는
-  //    상태 기반 멱등 스윕이라 다운타임에도 다음 창에서 밀린 시즌을 잡는다. noOverlap 로 중복 발사 차단.
-  //    KR: 금 15:35~16:05 매 5분(15:30 마감 직후). US: 토 05:05~06:05 매 5분(≈금 16:00 ET 마감 직후, DST 여유).
-  cron.schedule("35-59/5 15 * * 5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
-  cron.schedule("0-5 16 * * 5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
-  cron.schedule("5-59/5 5 * * 6", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
-  cron.schedule("0-5 6 * * 6", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  // ① 월간 리셋 — 매월 1일. KR 08:30 KST(KR 개장 전). US 22:00 KST(≈미 동부 1일 09:00 여름 개장 전).
+  //    리셋 전 finalizeDueSeasons 선행: 1일이 주말이면 확정 스윕(평일)이 아직 안 돌아 직전 달 시즌이
+  //    미확정 상태다. 리셋이 로스터를 새 시즌으로 이관하기 전에 직전 시즌을 먼저 확정해 두 시즌 동시
+  //    active·미확정 스킵을 막는다(멱등 — 이미 확정됐으면 no-op). 한계: 워커가 1일 크론 시각에 다운이면
+  //    이 리셋(로스터 이관)은 catch-up 없음(주간 설계와 동일 — resetSeason은 현금 리셋이라 부팅 재실행 불가).
+  cron.schedule("30 8 1 * *", () => void runNotified("KR 시즌 리셋", async () => {
+    await finalizeDueSeasons(db);
+    return resetSeason(db, cfgFor(cfg, "KR"), "KR");
+  }), { timezone: TZ });
+  cron.schedule("0 22 1 * *", () => void runNotified("US 시즌 리셋", async () => {
+    await finalizeDueSeasons(db);
+    return resetSeason(db, cfgFor(cfg, "US"), "US");
+  }), { timezone: TZ });
+  // ② 확정 스윕 — 평일 마감 직후 일별(월간 시즌은 말일에만 endsAt 경과). endsAt<=now & active 를 스캔하는
+  //    상태 기반 멱등 스윕이라 월말 외엔 0행·저비용이라 매일 돌아도 무해하고, 다운타임에도 다음 스윕이 밀린 시즌을 잡는다.
+  //    말일이 주말이면 다음 평일 스윕(또는 부팅 스윕)이 잡는다. noOverlap 로 중복 발사 차단.
+  //    KR: 평일 15:35 KST(15:30 마감 직후). US: 평일 06:35 KST(≈US 05~06시 KST 마감 후, DST 여유).
+  cron.schedule("35 15 * * 1-5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
+  cron.schedule("35 6 * * 1-5", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
   // ③ 일별 스냅샷 — 월~금 15:40(KR 종가 + 전일 US 종가 반영, 양 리그 live 시즌 공통).
   //    금요일 종가는 finalize의 finalValue에만 반영(MDD 마지막 1일 미표본 — 알려진 한계).
   //    US 토 스냅샷 슬롯(06:10) 폐지: US 시즌은 토 06:05까지 확정되고 장중 KST 주간은 US 장이 닫혀 있어
@@ -138,5 +147,5 @@ export function startCron(): void {
   // ⑤ 분봉 보존 — 매일 04:20 KST, N일 초과 prune.
   cron.schedule("20 4 * * *", () => void runNotified("분봉 prune", () => pruneMinuteCandles(db)), { timezone: TZ });
 
-  console.log(`[cron] 등록 완료 (Asia/Seoul, 확정=리그별 마감창, 분봉 보존 ${MINUTE_CANDLE_RETENTION_DAYS}일)`);
+  console.log(`[cron] 등록 완료 (Asia/Seoul, 월간 리셋·일별 마감 확정, 분봉 보존 ${MINUTE_CANDLE_RETENTION_DAYS}일)`);
 }

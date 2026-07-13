@@ -40,11 +40,13 @@ export const PROFILE_LLM_MAX_RETRIES = 1;
 /** env ANTHROPIC_MODEL 미설정 시 기본 모델. */
 export const PROFILE_DEFAULT_MODEL = "claude-haiku-4-5";
 
-// ── 시즌 수명주기 상수 (§4.1·§7.6) — 주간 시즌 경계. 단축 시즌은 env로 파라미터화. ──
+// ── 시즌 수명주기 상수 (§4.1·§7.6) — 단축 시즌은 env로 파라미터화. ──
+// 월간(달력월)이 기본 시즌 경계다. 주간(아래 WEEKDAY 상수 + weeklyPeriod)은 레거시/테스트용으로만 남긴다.
 
-/** 주간 시즌 시작 요일(월요일). 0=일 … 6=토 (KST 기준). */
+/** 주간 시즌 시작 요일(월요일). 0=일 … 6=토 (KST 기준). 레거시 weeklyPeriod 전용. */
 export const SEASON_START_WEEKDAY = 1;
-/** 주간 시즌 확정 요일·시각(금 15:30 KST, §4.1). endsAt 계산에 사용. */
+/** 주간 시즌 확정 요일(금, 레거시 weeklyPeriod 전용). */
 export const SEASON_END_WEEKDAY = 5;
+/** 장 마감 시각(KR 15:30 KST). 주간·월간 KR 마감 endsAt 계산에 공용. */
 export const SEASON_END_HOUR_KST = 15;
 export const SEASON_END_MINUTE_KST = 30;

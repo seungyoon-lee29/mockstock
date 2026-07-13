@@ -24,6 +24,7 @@ import {
   ensureActiveSeason,
   finalizeDueSeasons,
   maxDrawdownPct,
+  monthlyPeriod,
   resetSeason,
   snapshotPortfolios,
   weeklyPeriod,
@@ -141,6 +142,60 @@ test("⑦ US 금요일 경계: endsAt이 미 동부 금 16:00(여름/겨울 DST)
   const usId = `season_${summerPeriod.startsAt.toISOString()}:US`;
   assert.ok(krId.includes(":KR"), "KR id에 :KR 포함");
   assert.ok(usId.includes(":US"), "US id에 :US 포함");
+});
+
+// ── monthlyPeriod: 월간(달력월) 경계 ─────────────────────────────────────────
+test("monthlyPeriod KR: 일반 달 — start=1일 00:00 KST, end=말일 15:30 KST", () => {
+  // 2026-07 (31일). now는 달 중간(7/15 정오 KST = 03:00Z).
+  const now = new Date("2026-07-15T03:00:00Z");
+  const p = monthlyPeriod("KR", now);
+  // 1일 00:00 KST = 2026-06-30T15:00:00Z
+  assert.equal(p.startsAt.toISOString(), "2026-06-30T15:00:00.000Z");
+  // 7/31 15:30 KST = 2026-07-31T06:30:00Z
+  assert.equal(p.endsAt.toISOString(), "2026-07-31T06:30:00.000Z");
+});
+
+test("monthlyPeriod KR: 12월 — 연 롤오버(start=12/1, end=12/31 15:30 KST)", () => {
+  const now = new Date("2026-12-10T03:00:00Z");
+  const p = monthlyPeriod("KR", now);
+  assert.equal(p.startsAt.toISOString(), "2026-11-30T15:00:00.000Z"); // 12/1 00:00 KST
+  assert.equal(p.endsAt.toISOString(), "2026-12-31T06:30:00.000Z"); // 12/31 15:30 KST
+});
+
+test("monthlyPeriod KR: 2월 윤년(2028)=29일 / 비윤년(2027)=28일", () => {
+  const leap = monthlyPeriod("KR", new Date("2028-02-10T03:00:00Z"));
+  assert.equal(leap.endsAt.toISOString(), "2028-02-29T06:30:00.000Z"); // 2028 윤년 → 29일
+  const nonLeap = monthlyPeriod("KR", new Date("2027-02-10T03:00:00Z"));
+  assert.equal(nonLeap.endsAt.toISOString(), "2027-02-28T06:30:00.000Z"); // 2027 비윤년 → 28일
+});
+
+test("monthlyPeriod US: end=말일 16:00 ET — 여름 EDT(GMT-4)·겨울 EST(GMT-5) 모두", () => {
+  // 여름 달: 2026-07 → 7/31 16:00 EDT = 20:00Z
+  const summer = monthlyPeriod("US", new Date("2026-07-15T03:00:00Z"));
+  assert.equal(summer.startsAt.toISOString(), "2026-06-30T15:00:00.000Z"); // 7/1 00:00 KST
+  assert.equal(summer.endsAt.toISOString(), "2026-07-31T20:00:00.000Z");
+  // 겨울 달: 2026-01 → 1/31 16:00 EST = 21:00Z
+  const winter = monthlyPeriod("US", new Date("2026-01-15T03:00:00Z"));
+  assert.equal(winter.endsAt.toISOString(), "2026-01-31T21:00:00.000Z");
+});
+
+// currentPeriod는 비-export → ensureActiveSeason 경유로 경계·id 검증.
+// durationMs 없으면 월간 경계, 있으면 롤링(불변) 경계여야 한다.
+test("currentPeriod: durationMs 없으면 월간 경계(ensureActiveSeason 경유)", async () => {
+  const db = await newDb();
+  const season = await ensureActiveSeason(db, { seedMoney: SEED_KR }, "KR"); // durationMs 없음
+  const p = monthlyPeriod("KR", new Date());
+  assert.equal(season.startsAt.toISOString(), p.startsAt.toISOString());
+  assert.equal(season.endsAt.toISOString(), p.endsAt.toISOString());
+  assert.equal(season.id, `season_${p.startsAt.toISOString()}:KR`);
+});
+
+test("currentPeriod: durationMs 있으면 롤링 경계 불변(60s 단축 시즌)", async () => {
+  const db = await newDb();
+  const season = await ensureActiveSeason(db, CFG_KR, "KR"); // durationMs 60_000
+  const span = season.endsAt.getTime() - season.startsAt.getTime();
+  assert.equal(span, 60_000); // 롤링 길이 정확히 durationMs
+  assert.equal(season.startsAt.getTime() % 60_000, 0); // durationMs 격자에 정렬
 });
 
 // ① KR 단축 시즌 풀사이클 — 생성→매매→만료→finalize(expire·환불·finalValue·rank).
