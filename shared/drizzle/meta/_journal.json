@@ -50,6 +50,13 @@
       "when": 1783757717533,
       "tag": "0006_free_lila_cheney",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783920618498,
+      "tag": "0007_glorious_valkyrie",
+      "breakpoints": true
     }
   ]
 }

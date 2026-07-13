@@ -1,0 +1,1 @@
+ALTER TABLE "instruments" ADD COLUMN "shares_outstanding" numeric(20, 0);

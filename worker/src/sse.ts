@@ -8,6 +8,7 @@ import type { PriceBook } from "./priceBook";
 import { config } from "./config";
 import { syncOrder, type SyncOrderInput } from "./matching";
 import { kisStats } from "./feeds/kis";
+import { getIndices } from "./indices";
 
 function parseSymbols(param: string | null): { market: Market; symbol: string }[] {
   if (!param) return [];
@@ -47,6 +48,14 @@ export function createHttpServer(book: PriceBook): http.Server {
           kisSubscribeRejects: kisStats.subscribeRejects, // R4: KIS 41한도 초과 실측
         }),
       );
+      return;
+    }
+
+    if (url.pathname === "/indices") {
+      // 홈 인덱스 스트립 — 메모리 최신 스냅샷(DB 미접촉). /snapshot과 동일한 공개 읽기 계약:
+      // 키 없는 시장은 빈 배열(UI "—"). 상태 변경 없음이라 무인증.
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(getIndices()));
       return;
     }
 

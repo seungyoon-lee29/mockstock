@@ -154,6 +154,10 @@ export const instruments = pgTable(
     prevCloseDate: date("prev_close_date"),
     lastPrice: numeric("last_price", { precision: 18, scale: 2 }),
     lastPriceAt: timestamp("last_price_at", { withTimezone: true }),
+    // 상장주식수(느린 펀더멘털) — 부팅 1회 + 주간 크론이 채운다(worker/sharesOutstanding.ts).
+    // 시총 = sharesOutstanding × lastPrice(read-path 라이브 계산, computeMarketCap). NULL이면 시총 미상("—").
+    // numeric(20,0): 정수 주식수(수십억까지). float 금지(db.md) — 문자열 왕복.
+    sharesOutstanding: numeric("shares_outstanding", { precision: 20, scale: 0 }),
   },
   (t) => [primaryKey({ columns: [t.market, t.symbol] })],
 );

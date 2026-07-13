@@ -6,6 +6,8 @@ import { isMarketOpen } from "@mockstock/shared/calendar";
 import type { Feed } from "./types";
 
 const WS_ENDPOINT = "wss://ws.finnhub.io";
+const REST_BASE = "https://finnhub.io/api/v1";
+const QUOTE_TIMEOUT_MS = 5_000; // /quote 폴 상한 — 인덱스 폴러가 걸리지 않게
 const MAX_SYMBOLS = 50; // Finnhub 커넥션당 구독 한도
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 60_000;
@@ -15,6 +17,37 @@ interface FinnhubTrade {
   p: number; // price
   t: number; // epoch ms
   v: number; // volume
+}
+
+/**
+ * Finnhub REST /quote — ETF/심볼 현재값. 인덱스 폴러(US)가 SPY/QQQ를 프록시로 조회한다.
+ * 필드: c(현재가) d(전일대비) dp(전일대비%). 키(FINNHUB_API_KEY)는 워커 env 전용(B6/B14).
+ * 키 없거나 값 미확보(장 시작 전 c=0 등)면 null → 호출부 fail-soft. 로그에 키·응답본문 노출 금지.
+ */
+export async function fetchFinnhubQuote(
+  symbol: string,
+): Promise<{ value: number; change: number; changePct: number } | null> {
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) return null;
+  const url = new URL(`${REST_BASE}/quote`);
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("token", key);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), QUOTE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { c?: number; d?: number; dp?: number };
+    const value = Number(j.c);
+    const change = Number(j.d);
+    const changePct = Number(j.dp);
+    if (!Number.isFinite(value) || value === 0) return null; // c=0 = 데이터 없음(장 시작 전 등)
+    return { value, change: Number.isFinite(change) ? change : 0, changePct: Number.isFinite(changePct) ? changePct : 0 };
+  } catch {
+    return null; // 타임아웃·네트워크 실패 → fail-soft
+  } finally {
+    clearTimeout(t);
+  }
 }
 
 export class FinnhubFeed implements Feed {

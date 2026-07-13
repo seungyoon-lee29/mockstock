@@ -15,6 +15,7 @@ import {
 import { instruments, minuteCandles } from "@mockstock/shared/schema";
 import { getDb } from "./db";
 import { bootBackfillDailyCandles, syncDailyCandles } from "./candles/dailySync";
+import { syncSharesOutstanding } from "./sharesOutstanding";
 
 const TZ = "Asia/Seoul";
 const MINUTE_CANDLE_RETENTION_DAYS = Math.max(1, Number(process.env.MINUTE_CANDLE_RETENTION_DAYS ?? 30));
@@ -105,6 +106,10 @@ export function startCron(): void {
   // 부팅 1회 버스트라 B13과 양립. 키 전무+테이블 빈 상태면 내부에서 Discord 1회 경고.
   void runNotified("일봉 부팅 백필", () => bootBackfillDailyCandles(db, notify));
 
+  // 상장주식수 부팅 적재 — NULL 종목만(1회 버스트, B13 양립). 시총 표시 데이터 레이어.
+  // 키 없으면 내부 no-op(fail-soft). 주간 크론이 이후 slow-drift 갱신.
+  void runNotified("상장주식수 부팅 적재", () => syncSharesOutstanding(db, { onlyMissing: true }));
+
   // ① KR 리셋 — 월 08:30 KST(KR 개장 전). US 리셋 — 월 22:00 KST(≈미 동부 월 09:00 여름 개장 전).
   cron.schedule("30 8 * * 1", () => void runNotified("KR 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "KR"), "KR")), { timezone: TZ });
   cron.schedule("0 22 * * 1", () => void runNotified("US 시즌 리셋", () => resetSeason(db, cfgFor(cfg, "US"), "US")), { timezone: TZ });
@@ -127,6 +132,9 @@ export function startCron(): void {
   cron.schedule("30 7 * * 2-6", () => void runNotified("US 일봉 동기화", () => syncDailyCandles(db, "US")), { timezone: TZ, noOverlap: true });
   // ④ prevClose 갱신 — 07:30.
   cron.schedule("30 7 * * 1-5", () => void runNotified("prevClose 갱신", () => updatePrevClose(db)), { timezone: TZ });
+  // ⑧ 상장주식수 주간 갱신 — 일 06:30 KST(양 시장 휴장, 마감창 밖). 느린 펀더멘털이라 주 1회로 충분.
+  //    전 종목 재조회(발행·감자 반영). 키 없으면 내부 no-op. KIS는 kisRest throttle이 2 req/s 페이싱.
+  cron.schedule("30 6 * * 0", () => void runNotified("상장주식수 주간 갱신", () => syncSharesOutstanding(db)), { timezone: TZ, noOverlap: true });
   // ⑤ 분봉 보존 — 매일 04:20 KST, N일 초과 prune.
   cron.schedule("20 4 * * *", () => void runNotified("분봉 prune", () => pruneMinuteCandles(db)), { timezone: TZ });
 

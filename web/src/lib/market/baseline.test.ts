@@ -24,6 +24,7 @@ test("buildBaselineMap: 로우 없으면(키리스 로컬) 전 종목 seedPrice 
     lastPrice: String(SEED_AAPL),
     prevClose: String(SEED_AAPL),
     lastPriceAt: null,
+    sharesOutstanding: null, // 미적재 → 시총 "—"
   });
 });
 
@@ -37,8 +38,8 @@ test("buildBaselineMap: instruments 로우가 seed 기저를 덮고, NULL 컬럼
   const at = new Date(T0);
   const map = buildBaselineMap(
     [
-      { market: "US", symbol: "AAPL", lastPrice: "231.50", prevClose: "228.00", lastPriceAt: at },
-      { market: "US", symbol: "MSFT", lastPrice: null, prevClose: null, lastPriceAt: null },
+      { market: "US", symbol: "AAPL", lastPrice: "231.50", prevClose: "228.00", lastPriceAt: at, sharesOutstanding: "14840000000" },
+      { market: "US", symbol: "MSFT", lastPrice: null, prevClose: null, lastPriceAt: null, sharesOutstanding: null },
     ],
     null,
   );
@@ -48,9 +49,11 @@ test("buildBaselineMap: instruments 로우가 seed 기저를 덮고, NULL 컬럼
     lastPrice: "231.50",
     prevClose: "228.00",
     lastPriceAt: at.toISOString(),
+    sharesOutstanding: "14840000000",
   });
   // NULL 컬럼(시드 직후)은 seedPrice 기저 유지
   assert.equal(map[keyOf("US", "MSFT")].lastPrice, String(seedPriceOf("US", "MSFT")));
+  assert.equal(map[keyOf("US", "MSFT")].sharesOutstanding, null); // shares 미적재 → null
 });
 
 const base: BaselineMap = {
@@ -60,6 +63,7 @@ const base: BaselineMap = {
     lastPrice: "231.50",
     prevClose: "228.00",
     lastPriceAt: new Date(T0).toISOString(),
+    sharesOutstanding: null,
   },
 };
 

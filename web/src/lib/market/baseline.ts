@@ -19,6 +19,12 @@ export interface BaselineQuote {
   prevClose: string;
   /** ISO 8601. NULL(실틱 무경험)이면 병합 시 최저 우선순위(ts=0). */
   lastPriceAt: string | null;
+  /**
+   * 상장주식수(numeric 정수 문자열) 또는 미상 시 null. 정적 펀더멘털이라 틱 파이프라인(Quote)과
+   * 분리 — UI는 이 값과 라이브 quote.price로 시총 = computeMarketCap(shares, price)를 계산한다.
+   * NULL(키리스 로컬·미적재)이면 시총 null → "—".
+   */
+  sharesOutstanding: string | null;
 }
 /** keyOf(market, symbol) → BaselineQuote */
 export type BaselineMap = Record<string, BaselineQuote>;
@@ -30,6 +36,7 @@ export interface InstrumentBaselineRow {
   lastPrice: string | null;
   prevClose: string | null;
   lastPriceAt: Date | null;
+  sharesOutstanding: string | null;
 }
 
 /**
@@ -50,6 +57,7 @@ export function buildBaselineMap(
       lastPrice: String(e.seedPrice),
       prevClose: String(e.seedPrice),
       lastPriceAt: null,
+      sharesOutstanding: null, // 미적재(키리스 로컬 등) — 시총 "—"
     };
   }
   for (const r of rows) {
@@ -62,6 +70,7 @@ export function buildBaselineMap(
       lastPrice: r.lastPrice ?? seed,
       prevClose: r.prevClose ?? map[k]?.prevClose ?? seed,
       lastPriceAt: r.lastPriceAt ? r.lastPriceAt.toISOString() : null,
+      sharesOutstanding: r.sharesOutstanding ?? null,
     };
   }
   return map;

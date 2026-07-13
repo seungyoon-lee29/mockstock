@@ -27,6 +27,7 @@ async function load(market: Market | null): Promise<BaselineMap> {
     lastPrice: instruments.lastPrice,
     prevClose: instruments.prevClose,
     lastPriceAt: instruments.lastPriceAt,
+    sharesOutstanding: instruments.sharesOutstanding,
   };
   const rows = market
     ? await db.select(cols).from(instruments).where(eq(instruments.market, market))

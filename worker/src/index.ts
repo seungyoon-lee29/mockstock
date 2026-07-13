@@ -11,6 +11,7 @@ import { startBots } from "./bots";
 import { getDb, closeDb } from "./db";
 import { seedInstruments, tapTick, startLastPriceFlush, flushLastPrices, loadAnchors } from "./instruments";
 import { handleBackfill } from "./candles/backfillRoute";
+import { startIndices, stopIndices } from "./indices";
 
 assertProductionConfig(); // 프로덕션 fail-closed 부팅 게이트 (worker.md) — 시크릿/CORS 없으면 기동 거부
 
@@ -69,6 +70,7 @@ if (bootDb) {
 startMatching(book); // T08
 startCron(); // T06
 startBots(book); // T07 — 공개 벤치마크 봇(DATABASE_URL 없으면 자동 비활성)
+startIndices(); // 홈 인덱스 스트립 REST 폴러 — DB 미접촉, 키 없는 시장은 빈 배열(UI "—")
 
 const server = createHttpServer(book);
 // /candles/backfill 배선(멀티 타임프레임 v2 배치 B) — sse.ts 라우터는 배치 파일 경계상 불변,
@@ -92,6 +94,7 @@ server.listen(config.port, () => {
 async function shutdown() {
   console.log("[worker] shutting down");
   for (const f of feeds) f.stop();
+  stopIndices();
   stopLastPriceFlush();
   await flushLastPrices(lastPriceBuf); // 마지막 lastPrice 배치 — 장중 배포 시 최신가 유실 방지(마감이면 no-op)
   await aggregator.stop(); // 완성 분봉 flush 완료까지 대기 — 배포(SIGTERM) 시 유실 방지

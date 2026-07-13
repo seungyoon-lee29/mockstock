@@ -36,3 +36,37 @@ export function changeClass(v: number): string {
 export function formatMoney(value: number, currency: Currency): string {
   return formatPrice(value, currency);
 }
+
+/**
+ * 라이브 시총 = 상장주식수 × 현재가. 표시 전용 파생값(저장·정산 아님 — db.md의 float 금지는
+ * 체결·정산 금액 대상이라 무관). shares/price는 numeric 문자열(baseline 계약)이라 여기서 Number화.
+ * shares 미상(null·비수치)이거나 가격 비정상이면 null → UI는 "—". 반환은 통화 네이티브 단위 값.
+ */
+export function computeMarketCap(
+  sharesOutstanding: string | null | undefined,
+  price: number,
+): number | null {
+  if (sharesOutstanding == null) return null;
+  const shares = Number(sharesOutstanding);
+  if (!Number.isFinite(shares) || shares <= 0) return null;
+  if (!Number.isFinite(price) || price <= 0) return null;
+  return shares * price;
+}
+
+/**
+ * 시총 축약 표기. KRW → 조·억(예: 1,701.4조 / 3,400억), USD → T·B·M(예: $3.71T / $850.20B).
+ * cap이 null이면 "—"(미상). 큰 버킷은 소수, 작은 값은 정수/콤마.
+ */
+export function formatMarketCap(cap: number | null, currency: Currency): string {
+  if (cap == null || !Number.isFinite(cap)) return "—";
+  if (currency === "USD") {
+    if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}T`;
+    if (cap >= 1e9) return `$${(cap / 1e9).toFixed(2)}B`;
+    if (cap >= 1e6) return `$${(cap / 1e6).toFixed(2)}M`;
+    return `$${Math.round(cap).toLocaleString("en-US")}`;
+  }
+  // KRW: 조(1e12) · 억(1e8)
+  if (cap >= 1e12) return `${(cap / 1e12).toFixed(1)}조`;
+  if (cap >= 1e8) return `${Math.round(cap / 1e8).toLocaleString("ko-KR")}억`;
+  return `${Math.round(cap).toLocaleString("ko-KR")}원`;
+}
