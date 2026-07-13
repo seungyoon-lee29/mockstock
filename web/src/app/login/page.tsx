@@ -28,10 +28,18 @@ function authErrorMessage(err: { code?: string; message?: string } | null): stri
   }
 }
 
+/**
+ * 오픈 리다이렉트 가드 — 같은 오리진 상대경로만 허용. 단일 "/" 뒤에 슬래시/백슬래시가 오지 않아야 한다:
+ * "//evil"(프로토콜-상대)·"/\evil"(브라우저가 //로 정규화)·절대 URL을 모두 거부(codex 리뷰 MEDIUM).
+ */
+function safeCallback(raw: string | null): string {
+  return raw && /^\/(?![/\\])/.test(raw) ? raw : "/";
+}
+
 function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const callbackURL = search.get("callbackURL") || "/";
+  const callbackURL = safeCallback(search.get("callbackURL"));
 
   const [tab, setTab] = useState<"signin" | "signup">("signin");
   const [name, setName] = useState("");

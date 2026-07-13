@@ -37,6 +37,9 @@ export const auth = betterAuth({
   // 이메일+비밀번호 로그인 — 로컬/키 없는 환경에서도 동작(구글 OAuth 리다이렉트 불필요).
   // 해시(scrypt)·세션은 Better Auth가 처리, 해시 비번은 auth_account.password에 저장.
   // requireEmailVerification:false — 메일 발송 인프라 없이 가입 즉시 로그인(autoSignIn 기본 true).
+  //   트레이드오프(codex 리뷰 HIGH): 미검증 이메일 허용 → email-squatting(타인 이메일 선점) 가능.
+  //   본 게임은 이메일을 신뢰 앵커로 쓰지 않음(비번 재설정·복구 없음, 리더보드는 닉네임). 이메일을
+  //   신뢰 식별자로 쓰거나 복구 기능 추가 시 반드시 true + 메일 발송 구성으로 전환할 것.
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: false,
