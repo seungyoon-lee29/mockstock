@@ -18,6 +18,7 @@ import {
 } from "@mockstock/shared";
 import { usePrices } from "./usePrices";
 import {
+  expectedMinuteBars,
   isChartLiveSource,
   isCurrentDailyPeriod,
   isMinuteTf,
@@ -27,6 +28,16 @@ import {
 
 const MAX_CANDLES = CANDLE_LIMITS.intradayCandleCap; // 분봉 유지 상한 — 서버 캡과 동일 정책.
 const SEC = 60; // 분→초 환산 — aggregateIntraday(shared)와 동일 경계.
+
+// ponytail: 분봉 백필이 빈/짧게 오는 건 장중엔 거의 항상 일시적(워커 재기동 직후·KIS REST
+// 순간 rate-limit EGW00201로 캐시가 아직 안 데워짐 → 라우트가 DB의 몇 안 되는 로우만 반환) —
+// 실데이터는 존재하니 몇 초 뒤 재시도하면 채워진다. 일·주·월의 빈 응답은 정직한 공백일 수 있어 재시도 안 함.
+// ~30초 창(10×3s) — KIS 경합 하 최악의 콜드 백필(~10-15s)+persist 반영까지 커버(8s는 짧아 재시도 소진).
+const BACKFILL_RETRY = { tries: 10, delayMs: 3000 };
+// 재시도 임계: 세션 경과분 대비 이 비율 미만이면 "실패 강등"으로 보고 재시도(정상은 수십·수백봉).
+// 백필이 예산 절단·부분 커버로 세션 전체보다 짧을 수 있어 여유 있게 절반으로 — 개장 직후엔 기대치도
+// 작아 불필요 재시도 안 함. 기대 0(개장 전·휴장)이면 빈 응답도 정직한 공백으로 확정(재시도 안 함).
+const BACKFILL_MIN_RATIO = 0.5;
 
 /**
  * 타임프레임별 캔들 시리즈(백필 + 라이브). 요청 tf로 응답 타입 분기(별도 판별자 불요 — 계약).
@@ -59,18 +70,41 @@ export function useCandles(
     setCompleted([]);
     setForming(null);
     let alive = true;
-    fetch(`/api/candles?market=${market}&symbol=${encodeURIComponent(symbol)}&tf=${tf}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data: unknown) => {
-        if (!alive || !Array.isArray(data)) return;
-        if (isMinuteTf(tf)) setBackfill(data as IntradayCandle[]);
-        else setDaily(data as DailyCandle[]);
-      })
-      .catch(() => {
-        // 백필 실패 → 라이브 단독 동작(강등). 에러 UI는 호출부 소관.
-      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const minute = isMinuteTf(tf);
+    const url = `/api/candles?market=${market}&symbol=${encodeURIComponent(symbol)}&tf=${tf}`;
+    // 백필 fetch. 분봉이 빈/실패면 BACKFILL_RETRY 만큼 재시도, 비어있지 않은 응답이 오는 즉시 확정.
+    const load = async (attempt: number) => {
+      let data: unknown = [];
+      try {
+        // no-store 필수: /api/candles엔 Cache-Control이 없어 브라우저가 콜드 창의 빈/짧은 응답을
+        // 캐시·리플레이 → backfill이 영영 []로 고착(재시도도 캐시된 빈 body 재독). 라이브 시세는 캐시 금물.
+        const r = await fetch(url, { cache: "no-store" });
+        data = r.ok ? await r.json() : [];
+      } catch {
+        // 실패 → 아래 재시도 판단으로 넘어감(라이브 단독 강등 유지). 에러 UI는 호출부 소관.
+      }
+      if (!alive) return;
+      const arr = Array.isArray(data) ? data : [];
+      if (!minute) {
+        setDaily(arr as DailyCandle[]); // 일·주·월: 빈 응답도 정본으로 확정, 재시도 없음.
+        return;
+      }
+      // 받은 만큼은 항상 반영(짧아도 라이브보다 낫다) — 그 위에서 임계 미달이면 재시도.
+      if (arr.length > 0) setBackfill(arr as IntradayCandle[]);
+      // 세션 경과분 → 이 tf의 기대 봉수. 기대 0(개장 전·휴장·주말)이면 임계 0 → 빈 응답도 확정, 재시도 안 함.
+      // arr.length가 empty뿐 아니라 "실패 강등(~2봉)"일 때도 재시도 — 라우트는 백필 실패 시 DB 몇 로우만 준다.
+      const expected = Math.floor(expectedMinuteBars(market, new Date()) / TF_MINUTES[tf]);
+      const enough = arr.length >= expected * BACKFILL_MIN_RATIO;
+      if (!enough && attempt < BACKFILL_RETRY.tries) {
+        timer = setTimeout(() => load(attempt + 1), BACKFILL_RETRY.delayMs);
+      }
+      // 재시도 소진 → 마지막으로 받은(빈·짧은) backfill 유지.
+    };
+    void load(0);
     return () => {
       alive = false;
+      if (timer) clearTimeout(timer);
     };
   }, [market, symbol, tf]);
 

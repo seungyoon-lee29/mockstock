@@ -81,6 +81,10 @@ type PriceChartProps = {
   className?: string;
 };
 
+// 이 봉수 이상 한꺼번에 늘면(=뒤늦은 백필 도착) 보이는 범위를 재적합. +1(분봉 롤오버·리플레이
+// 커서 한 스텝)은 사용자 줌/팬을 뺏지 않도록 재적합 안 함. 최초 0→N(리플레이 마운트)도 대점프라 1회 적합.
+const BACKFILL_FIT_JUMP = 10;
+
 // OHLC 레전드 한 줄 상태(크로스헤어 바 or 마지막 바). currency 있으면 formatPrice, 없으면 원값.
 type Ohlc = { open: number; high: number; low: number; close: number };
 
@@ -95,8 +99,10 @@ export function PriceChart({
   className,
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<ReturnType<typeof createChart> | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
+  const barCountRef = useRef(0); // 마지막 fitContent 시점의 바 수 — 바 수 증가(백필 도착·롤오버)에만 재적합.
   const [legend, setLegend] = useState<Ohlc | null>(null);
 
   // 분봉↔일봉 카테고리 — Time 타입(UTCTimestamp vs "YYYY-MM-DD" 문자열)이 한 시리즈에 섞이면
@@ -207,6 +213,8 @@ export function PriceChart({
       chart.subscribeCrosshairMove(onMove);
 
       chart.timeScale().fitContent();
+      chartRef.current = chart;
+      barCountRef.current = data.length;
     } catch (err) {
       console.error("[PriceChart] 차트 생성 실패 — 차트만 생략:", err);
       try {
@@ -215,12 +223,14 @@ export function PriceChart({
         // 반쯤 만들어진 차트의 remove 실패까지 페이지를 죽이게 두지 않는다.
       }
       chart = null;
+      chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
     }
 
     return () => {
       chart?.remove();
+      chartRef.current = null;
       seriesRef.current = null;
       volumeRef.current = null;
     };
@@ -235,6 +245,13 @@ export function PriceChart({
     try {
       seriesRef.current?.setData(data);
       if (volumes && volumes.length > 0) volumeRef.current?.setData(volumes);
+      // 바 수가 크게 늘면(=뒤늦은 백필 도착, +~200) 보이는 범위를 재적합 — setData는 뷰를 안 넓힌다.
+      // 초기 fitContent가 라이브 2봉에만 맞춰진 뒤 240봉 백필이 도착하면 차트가 2봉에 갇히던 버그(a1).
+      // +1(분봉 롤오버·리플레이 커서 스텝)은 재적합 안 함 — 사용자 줌/팬·리플레이 재생을 매 스텝 뺏지 않도록.
+      if (chartRef.current && data.length - barCountRef.current >= BACKFILL_FIT_JUMP) {
+        chartRef.current.timeScale().fitContent();
+      }
+      barCountRef.current = data.length;
     } catch (err) {
       console.error("[PriceChart] 데이터 반영 실패 — 이번 갱신만 생략:", err);
     }

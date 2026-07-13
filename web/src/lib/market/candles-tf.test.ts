@@ -4,6 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CANDLE_LIMITS, TF_MINUTES, type IntradayCandle } from "@mockstock/shared";
 import {
+  expectedMinuteBars,
   formatMarketDate,
   formatMarketTime,
   isChartLiveSource,
@@ -65,6 +66,15 @@ test("minuteLookbackFromSec: 월요일 장중 KR 1m — 직전 거래일 포함�
   const from = minuteLookbackFromSec("KR", "1m", mon);
   assert.ok(from < sec("2026-07-10T09:00:00+09:00"), "금요일(직전 거래일) 개장 이전");
   assert.ok(from >= Math.floor(mon.getTime() / 1000) - 6 * 24 * 3600, "6일 안쪽");
+});
+
+test("expectedMinuteBars: KR 세션 09:00~15:30(390분) — 개장 전 0·장중 경과분·마감 후 클램프·주말 0", () => {
+  // 월요일(2026-07-13) 각 시점의 KST 벽시계 → 개장 후 경과분(retry 임계 기준).
+  assert.equal(expectedMinuteBars("KR", new Date("2026-07-13T08:00:00+09:00")), 0, "개장 전");
+  assert.equal(expectedMinuteBars("KR", new Date("2026-07-13T09:00:00+09:00")), 0, "개장 정각");
+  assert.equal(expectedMinuteBars("KR", new Date("2026-07-13T11:00:00+09:00")), 120, "11시=120분 경과");
+  assert.equal(expectedMinuteBars("KR", new Date("2026-07-13T18:00:00+09:00")), 390, "마감 후 세션 전체로 클램프");
+  assert.equal(expectedMinuteBars("KR", new Date("2026-07-11T11:00:00+09:00")), 0, "토요일=0(직전 금요일장 이미 축적)");
 });
 
 test("marketDayOf: US 저녁 세션은 KST로 다음날이지만 거래일은 ET 기준", () => {

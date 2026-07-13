@@ -107,6 +107,24 @@ export function minuteLookbackFromSec(market: Market, tf: MinuteTf, now: Date): 
   return t - DAY_SEC;
 }
 
+/**
+ * 지금까지 오늘 세션이 만들어냈어야 할 1분봉 수의 대략값(retry 임계용).
+ * 개장 전/휴장/주말 → 0(직전 세션 데이터는 이미 DB에 있어 retry 불필요). 장중 → 개장 후 경과분,
+ * 마감 후 → 세션 전체 길이로 클램프. 시장 로컬 시각은 formatMarketTime(HH:mm)으로 뽑아 tz 수식 회피.
+ * 근사면 충분 — retry는 "실패 강등(~2봉)"과 "정상(수십·수백봉)"만 구분하면 된다.
+ */
+export function expectedMinuteBars(market: Market, now: Date): number {
+  const { open, close } = REGULAR_SESSION[market];
+  const day = marketDayOf(market, now);
+  const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+  if (dow === 0 || dow === 6) return 0; // 주말 — 직전 금요일장은 이미 축적됨
+  const [h, m] = formatMarketTime(market, Math.floor(now.getTime() / 1000)).split(":").map(Number);
+  const nowMin = h * 60 + m;
+  const elapsed = nowMin - toMinutes(open);
+  const sessionMinutes = toMinutes(close) - toMinutes(open);
+  return Math.max(0, Math.min(elapsed, sessionMinutes));
+}
+
 /** today("YYYY-MM-DD") 기준 days일 전 날짜 — 일봉 룩백 컷오프(dayLookbackDays). */
 export function lookbackStartDate(today: string, days: number): string {
   const d = new Date(`${today}T00:00:00Z`);

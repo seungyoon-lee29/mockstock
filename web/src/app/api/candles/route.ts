@@ -131,8 +131,19 @@ async function serveMinutes(
     );
     if (range) {
       const bf = await fetchBackfillCandles(market, symbol, tf, range.from, range.to);
-      // 백필은 tf 네이티브 바(US) 또는 1분(KR)일 수 있음 — 어느 쪽이든 병합 후 롤업이 흡수한다.
-      if (bf && bf.length > 0) merged = mergeCandles(dbCandles, bf as IntradayCandle[]);
+      // 백필은 tf 네이티브 바(US=5Min 등) 또는 tf 롤업(KR도 aggregateIntraday로 5m·15m…) 일 수 있음
+      // — 어느 쪽이든 병합 후 롤업이 흡수한다.
+      if (bf && bf.length > 0) {
+        merged = mergeCandles(dbCandles, bf as IntradayCandle[]);
+        // 콜드 요청마다 KIS를 다시 때리지 않도록 백필분을 minute_candles에 영속화 →
+        // 다음 요청(및 워커 재기동 후 모든 요청)은 DB에서 즉답. 부팅 시 전 심볼 백필은 KIS 콜 과다로 배제(ADR),
+        // 온디맨드 persist + 재시도 창이 확정 범위. **tf==="1m"일 때만** — KR·US 모두 tf≠1m는
+        // tf 네이티브/롤업 바라(alpaca NATIVE_TF·backfillRoute aggregateIntraday) 1분 테이블에 넣으면 오염된다.
+        // await(fire-and-forget 아님): Vercel 서버리스는 return 직후 함수를 얼려/종료해 void write가
+        // 잘리기 일쑤 → persist가 안 남아 fix 무력화. cold 경로(백필 ~10-15s)에만 ~100-300ms 더해질 뿐,
+        // persistMinuteBars는 자체 try/catch로 절대 throw 안 하므로 await해도 엔드포인트를 500내지 않는다.
+        if (tf === "1m") await persistMinuteBars(market, symbol, bf as IntradayCandle[]);
+      }
     }
   }
 
@@ -141,7 +152,41 @@ async function serveMinutes(
     agg.length > CANDLE_LIMITS.intradayCandleCap
       ? agg.slice(-CANDLE_LIMITS.intradayCandleCap)
       : agg;
-  return Response.json(capped);
+  // no-store: 라이브 분봉은 콜드 창(백필 진행 중)의 짧은 응답이 브라우저·CDN에 고착되면 안 됨(방어선).
+  return Response.json(capped, { headers: { "cache-control": "no-store" } });
+}
+
+/**
+ * 백필로 받은 **1분** 바를 minute_candles에 upsert(멱등). worker aggregator.toRow와 동일 shape:
+ * ts=Date(time*1000), o/h/l/c=numeric(18,2) 문자열(.toFixed(2)), v=numeric(20,0) 정수 문자열.
+ * PK(market,symbol,ts) onConflictDoNothing — aggregator 라이브 정본과 충돌 시 기존 유지.
+ * fail-soft: write 실패는 로그 후 삼킨다 — 병합 응답은 이미 반환되므로 candles 엔드포인트를 500내면 안 됨.
+ *
+ * v 단위 불일치(알려진·본질적, 버그 아님): 여기 저장하는 백필 v는 벤더 실거래량이지만, aggregator가
+ * 쓰는 라이브 v는 틱 카운트다. 이 혼용은 persist 이전부터 렌더된 차트에 이미 존재했고(서빙형 백필=실거래량,
+ * 라이브 꼬리=틱 카운트) persist가 악화시키지 않는다 — 겹치는 ts는 onConflictDoNothing으로 라이브 로우 유지.
+ * 이 모델에서 라이브 꼬리 v를 실거래량으로 만들 방법은 없다. 단위를 억지로 맞추려 하지 말 것(v2 확정).
+ */
+async function persistMinuteBars(
+  market: Market,
+  symbol: string,
+  bars: IntradayCandle[],
+): Promise<void> {
+  try {
+    const rows = bars.map((c) => ({
+      market,
+      symbol,
+      ts: new Date(c.time * 1000),
+      o: c.o.toFixed(2),
+      h: c.h.toFixed(2),
+      l: c.l.toFixed(2),
+      c: c.c.toFixed(2),
+      v: String(Math.trunc(c.v)),
+    }));
+    await getDb().insert(minuteCandles).values(rows).onConflictDoNothing();
+  } catch (e) {
+    console.error("[candles] 백필 분봉 영속화 실패(응답은 정상)", e);
+  }
 }
 
 /** Postgres undefined_table(42P01) 판별 — 드라이버에 따라 code가 에러 본체 또는 cause에 실린다. */
