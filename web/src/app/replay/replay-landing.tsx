@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SymbolAvatar } from "@/components/market/symbol-avatar";
 import {
   REPLAY_SCENARIO_ID,
   manifestUrl,
@@ -67,7 +68,8 @@ export function ReplayLanding() {
                 size="sm"
                 className="transition group-hover:ring-brand/40 group-hover:ring-2"
               >
-                <CardHeader>
+                <CardHeader className="flex-row items-center gap-2 space-y-0">
+                  <SymbolAvatar market="US" symbol={symbol} name={symbol} size="sm" />
                   <CardTitle className="text-base font-bold">{symbol}</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-0 text-xs text-muted-foreground">

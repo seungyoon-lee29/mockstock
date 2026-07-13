@@ -7,10 +7,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { toast } from "sonner";
-import type { CandlestickData, Time } from "lightweight-charts";
-import { SEED_MONEY, type Currency, type Market } from "@mockstock/shared";
+import type { CandlestickData, HistogramData, Time } from "lightweight-charts";
+import { PRICE_COLORS, SEED_MONEY, type Currency, type Market } from "@mockstock/shared";
 import { authClient } from "@/lib/auth-client";
 import { PriceChart } from "@/components/PriceChart";
+import { SymbolAvatar } from "@/components/market/symbol-avatar";
 import { PriceText } from "@/components/PriceText";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +42,11 @@ import {
   type ReplayAccount,
   type Timeframe,
 } from "@/lib/replay";
+
+// 거래량 막대색 — 종목상세와 동일 규약: PRICE_COLORS(상승 빨강/하락 파랑)에 알파 접미사(8자리 hex).
+const VOLUME_ALPHA = "59"; // ~35% (0x59/0xff)
+const VOLUME_UP = PRICE_COLORS.up + VOLUME_ALPHA;
+const VOLUME_DOWN = PRICE_COLORS.down + VOLUME_ALPHA;
 
 // 매매 프리셋 비중(현금/보유의 25·50·100%). 매직넘버 산재 방지용 단일 소스.
 const TRADE_FRACTIONS = [0.25, 0.5, 1] as const;
@@ -224,16 +230,19 @@ function ReplaySession({
 
   // 미래 누설 금지: 현재 시점까지만. 완주 후 "이후 보기" 시에만 tail 공개.
   // 주봉은 커서까지 자른 일봉을 집계하므로(미래 캔들이 애초에 없음) 누설 불변식이 그대로 유지된다.
-  const chartData = useMemo<CandlestickData<Time>[]>(
-    () =>
-      visibleSeries(candles, cursor, timeframe, { finished, revealTail }).map((c) => ({
-        time: c.date as Time,
-        open: c.o,
-        high: c.h,
-        low: c.l,
-        close: c.c,
-      })),
+  const visible = useMemo(
+    () => visibleSeries(candles, cursor, timeframe, { finished, revealTail }),
     [candles, cursor, finished, revealTail, timeframe],
+  );
+  const chartData = useMemo<CandlestickData<Time>[]>(
+    () => visible.map((c) => ({ time: c.date as Time, open: c.o, high: c.h, low: c.l, close: c.c })),
+    [visible],
+  );
+  // 거래량 오버레이 — 같은 time 축, 색은 방향(상승 빨강/하락 파랑) + 저알파. 커서까지 자른 visible에서
+  // 파생하므로 미래 누설 불변식 공유(chartData와 동일 소스).
+  const volumes = useMemo<HistogramData<Time>[]>(
+    () => visible.map((c) => ({ time: c.date as Time, value: c.v, color: c.c >= c.o ? VOLUME_UP : VOLUME_DOWN })),
+    [visible],
   );
 
   function trade(next: ReplayAccount) {
@@ -289,7 +298,10 @@ function ReplaySession({
           <Link href="/replay" className="text-sm text-muted-foreground hover:text-foreground">
             ← 훈련소
           </Link>
-          <h1 className="text-2xl font-extrabold tracking-tight">{symbol}</h1>
+          <div className="flex items-center gap-2">
+            <SymbolAvatar market={market} symbol={symbol} name={symbol} size="lg" />
+            <h1 className="text-2xl font-extrabold tracking-tight">{symbol}</h1>
+          </div>
         </div>
         <div className="text-right">
           <div className="text-xl font-bold tabular-nums">{formatPrice(price, currency)}</div>
@@ -305,7 +317,7 @@ function ReplaySession({
       <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_20rem]">
         <Card>
           <CardContent className="px-2">
-            <PriceChart symbol={symbol} data={chartData} market={market} currency={currency} height={360} />
+            <PriceChart symbol={symbol} data={chartData} volumes={volumes} market={market} currency={currency} height={360} />
           </CardContent>
         </Card>
 
