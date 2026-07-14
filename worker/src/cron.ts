@@ -20,7 +20,7 @@ import { syncSharesOutstanding } from "./sharesOutstanding";
 const TZ = "Asia/Seoul";
 const MINUTE_CANDLE_RETENTION_DAYS = Math.max(1, Number(process.env.MINUTE_CANDLE_RETENTION_DAYS ?? 30));
 
-/** env 파라미터화(§4.1) — 단축 시즌·시드 조정을 코드 수정 없이. 미설정 시 주간/1,000만 기본. */
+/** env 파라미터화(§4.1) — 단축 시즌·시드 조정을 코드 수정 없이. 미설정 시 월간(달력월)/리그별 SEED_MONEY 기본. */
 function seasonConfig(): SeasonConfig {
   return {
     durationMs: process.env.SEASON_DURATION_MS ? Number(process.env.SEASON_DURATION_MS) : undefined,
@@ -130,7 +130,7 @@ export function startCron(): void {
   cron.schedule("35 15 * * 1-5", () => void runNotified("KR 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
   cron.schedule("35 6 * * 1-5", () => void runNotified("US 확정 스윕", () => finalizeDueSeasons(db)), { timezone: TZ, noOverlap: true });
   // ③ 일별 스냅샷 — 월~금 15:40(KR 종가 + 전일 US 종가 반영, 양 리그 live 시즌 공통).
-  //    금요일 종가는 finalize의 finalValue에만 반영(MDD 마지막 1일 미표본 — 알려진 한계).
+  //    시즌 말일 종가는 finalize의 finalValue에만 반영(MDD 마지막 1일 미표본 — 알려진 한계).
   //    US 토 스냅샷 슬롯(06:10) 폐지: US 시즌은 토 06:05까지 확정되고 장중 KST 주간은 US 장이 닫혀 있어
   //    화~금 실행분이 15:40과 동일 값이므로 구조적 no-op이다.
   cron.schedule("40 15 * * 1-5", () => void runNotified("스냅샷", () => snapshotPortfolios(db)), { timezone: TZ });

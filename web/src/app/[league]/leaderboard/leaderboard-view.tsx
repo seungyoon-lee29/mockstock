@@ -29,6 +29,8 @@ const COUNTDOWN_TICK_MS = 1_000;
 const KST_TZ = "Asia/Seoul";
 const kstDayFmt = new Intl.DateTimeFormat("ko-KR", { timeZone: KST_TZ, month: "long", day: "numeric" });
 const fmtDay = (iso: string) => kstDayFmt.format(new Date(iso));
+// 시즌 제목은 하드코딩("이번 달") 대신 실제 startsAt의 달을 찍는다 — 시즌 행과 항상 일치.
+const kstMonthFmt = new Intl.DateTimeFormat("ko-KR", { timeZone: KST_TZ, month: "long" });
 
 function formatCountdown(ms: number): string {
   if (ms <= 0) return "시즌 종료 · 정산 중";
@@ -189,7 +191,7 @@ function SeasonBanner({
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3 rounded-xl bg-card px-4 py-4 ring-1 ring-foreground/10">
       <div>
         <p className="text-xs text-muted-foreground">진행 중인 시즌</p>
-        <p className="text-lg font-bold tracking-tight">이번 달 시즌</p>
+        <p className="text-lg font-bold tracking-tight">{kstMonthFmt.format(new Date(season.startsAt))} 시즌</p>
         <p className="text-xs text-muted-foreground">
           {fmtDay(season.startsAt)} – {fmtDay(season.endsAt)}
         </p>

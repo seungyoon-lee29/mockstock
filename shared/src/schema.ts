@@ -55,7 +55,7 @@ export const users = pgTable("users", {
     .$onUpdate(() => new Date()),
 });
 
-/** 주간 시즌. 리그 ≡ 시장 1:1 — id = <isoStart>:US / :KR, seedMoney·seed는 리그별 네이티브. */
+/** 시즌(기본 월간·달력월). 리그 ≡ 시장 1:1 — id = <isoStart>:US / :KR, seedMoney·seed는 리그별 네이티브. */
 export const seasons = pgTable("seasons", {
   id: text("id").primaryKey(),
   market: marketEnum("market").notNull(),
