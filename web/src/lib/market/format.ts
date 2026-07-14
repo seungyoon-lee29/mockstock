@@ -22,6 +22,20 @@ export function formatPct(pct: number): string {
   return `${sign}${Math.abs(pct).toFixed(2)}%`;
 }
 
+// 거래 체결시각 표기 — KST 월/일 시:분(브라우저 TZ 무관, 시즌 경계와 동일 KST 기준).
+const kstDateTimeFmt = new Intl.DateTimeFormat("ko-KR", {
+  timeZone: "Asia/Seoul",
+  month: "numeric",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+/** ISO 문자열 → "M. D. HH:mm"(KST). null이면 "—". */
+export function formatTradeTime(iso: string | null): string {
+  return iso ? kstDateTimeFmt.format(new Date(iso)) : "—";
+}
+
 export type Dir = "up" | "down" | "flat";
 export function dirOf(v: number): Dir {
   return v > 0 ? "up" : v < 0 ? "down" : "flat";

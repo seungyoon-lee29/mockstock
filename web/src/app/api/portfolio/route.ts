@@ -1,4 +1,4 @@
-// GET /api/portfolio?league=us|kr — 세션 유저의 활성 리그 시즌 포트폴리오(계좌·보유·미체결·실현손익).
+// GET /api/portfolio?league=us|kr — 세션 유저의 활성 리그 시즌 포트폴리오(계좌·보유·미체결·거래내역·실현손익).
 // 신뢰 경계(db.md): userId=세션에서만, seasonId=서버 active 시즌. 금액은 numeric 문자열 그대로 반환.
 // 평가액은 계산하지 않는다 — 클라가 SSE 가격으로 로컬 재계산(§9). 부수효과 없음(계좌 lazy upsert 안 함).
 import type { NextRequest } from "next/server";
@@ -7,7 +7,7 @@ import { accounts, orders, positions, seasons } from "@mockstock/shared/schema";
 import type { Market } from "@mockstock/shared";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
-import { buildPortfolio } from "@/lib/portfolio";
+import { buildPortfolio, TRADE_HISTORY_LIMIT } from "@/lib/portfolio";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   if (!season) return json(404, { message: "진행 중인 시즌이 없습니다." });
 
   // 시즌 스코프 집계·목록은 서로 독립 → 병렬 조회.
-  const [accountRows, reservedRows, realizedRows, positionRows, openOrderRows] =
+  const [accountRows, reservedRows, realizedRows, positionRows, openOrderRows, tradeRows] =
     await Promise.all([
       db
         .select({ cash: accounts.cash })
@@ -98,6 +98,22 @@ export async function GET(req: NextRequest): Promise<Response> {
         .from(orders)
         .where(and(eq(orders.userId, userId), eq(orders.seasonId, season.id), eq(orders.status, "open")))
         .orderBy(desc(orders.createdAt)),
+      // 거래내역 — 체결된 주문(status='filled')만, 체결시각 최신순 최근 N건.
+      db
+        .select({
+          id: orders.id,
+          market: orders.market,
+          symbol: orders.symbol,
+          side: orders.side,
+          type: orders.type,
+          qty: orders.qty,
+          filledPrice: orders.filledPrice,
+          filledAt: orders.filledAt,
+        })
+        .from(orders)
+        .where(and(eq(orders.userId, userId), eq(orders.seasonId, season.id), eq(orders.status, "filled")))
+        .orderBy(desc(orders.filledAt))
+        .limit(TRADE_HISTORY_LIMIT),
     ]);
 
   return Response.json(
@@ -108,6 +124,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       realizedRows[0]?.v ?? null,
       positionRows,
       openOrderRows,
+      tradeRows,
     ),
   );
 }

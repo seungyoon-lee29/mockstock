@@ -13,6 +13,7 @@ import {
   formatPct,
   formatPrice,
   formatSignedPrice,
+  formatTradeTime,
 } from "@/lib/market/format";
 import type { PortfolioPosition, PortfolioResponse } from "@/lib/portfolio";
 import { InvestmentProfileCard } from "@/components/profile/investment-profile-card";
@@ -310,6 +311,75 @@ function PortfolioView({ league, userId }: { league: string; userId: string }) {
                           >
                             {cancelingId === o.id ? "취소 중…" : "취소"}
                           </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* 거래내역 — 체결된 주문(최신순). 실현손익의 원천이 되는 실제 매매 기록. */}
+      <section>
+        <h2 className="mb-2 text-lg font-semibold">거래내역</h2>
+        <Card>
+          <CardContent className="p-0">
+            {data.trades.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                아직 체결된 거래가 없습니다.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>체결시각</TableHead>
+                    <TableHead>종목</TableHead>
+                    <TableHead>구분</TableHead>
+                    <TableHead className="text-right">수량</TableHead>
+                    <TableHead className="text-right">체결가</TableHead>
+                    <TableHead className="text-right">체결금액</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.trades.map((t) => {
+                    const tradeCurrency = currencyOf(t.market, t.symbol);
+                    const name = getEntry(t.market, t.symbol)?.name ?? t.symbol;
+                    const price = t.filledPrice ? Number(t.filledPrice) : null;
+                    const amount = price != null ? Number(t.qty) * price : null;
+                    return (
+                      <TableRow key={t.id}>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                          {formatTradeTime(t.filledAt)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <SymbolAvatar market={t.market} symbol={t.symbol} name={name} />
+                            <div>
+                              <div className="font-medium">{name}</div>
+                              <div className="text-xs text-muted-foreground">{t.symbol}</div>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className={t.side === "buy" ? "text-up" : "text-down"}>
+                            {t.side === "buy" ? "매수" : "매도"}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · {t.type === "limit" ? "지정가" : "시장가"}
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {Number(t.qty).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {price != null ? formatPrice(price, tradeCurrency) : "—"}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {amount != null ? formatPrice(amount, tradeCurrency) : "—"}
                         </TableCell>
                       </TableRow>
                     );

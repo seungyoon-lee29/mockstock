@@ -4,6 +4,9 @@
 // 금액은 전부 numeric 문자열 그대로 전달(float 금지) — 합산은 SQL(Postgres)에 위임해 정확.
 import type { Market, Side } from "@mockstock/shared";
 
+/** 거래내역 표시 상한(최신순) — 본인·봇 공개 뷰 공통. 시즌 내 체결이 많아도 UI를 가볍게. */
+export const TRADE_HISTORY_LIMIT = 100;
+
 // ── DB 로우 입력 형태 (drizzle select 결과와 정합) ──
 export interface SeasonMetaRow {
   id: string;
@@ -30,6 +33,16 @@ export interface OpenOrderRow {
   reserved: string | null;
   createdAt: Date;
 }
+export interface FilledOrderRow {
+  id: string;
+  market: Market;
+  symbol: string;
+  side: Side;
+  type: "market" | "limit";
+  qty: string;
+  filledPrice: string | null;
+  filledAt: Date | null;
+}
 
 // ── 응답 형태 (클라이언트가 type import) ──
 export interface PortfolioPosition {
@@ -50,6 +63,17 @@ export interface PortfolioOrder {
   reserved: string | null;
   createdAt: string; // ISO
 }
+/** 체결된 주문 1건(거래내역). 미체결 주문과 달리 체결가·체결시각을 싣는다. */
+export interface PortfolioTrade {
+  id: string;
+  market: Market;
+  symbol: string;
+  side: Side;
+  type: "market" | "limit";
+  qty: string;
+  filledPrice: string | null;
+  filledAt: string | null; // ISO
+}
 export interface PortfolioResponse {
   season: { id: string; market: Market; startsAt: string; endsAt: string; seedMoney: string };
   cash: string; // 예약분 차감 후 순 현금(네이티브 통화).
@@ -57,10 +81,12 @@ export interface PortfolioResponse {
   realizedPnl: string; // 시즌 누적 실현손익 SUM(네이티브 통화).
   positions: PortfolioPosition[]; // qty>0만.
   openOrders: PortfolioOrder[];
+  trades: PortfolioTrade[]; // 체결 내역(최신순, 최근 N건). 본인 포트폴리오만 — 전략 비공개(participant 제외).
 }
 
 /** 참가자 공개 포트폴리오 (GET /api/users/[userId]/portfolio) — 리더보드 행 클릭 상세.
- * openOrders는 포함하지 않는다(미체결 주문은 비공개 전략). reserved는 리더보드가 이미
+ * 일반 유저는 미체결 주문·거래내역을 숨긴다(비공개 전략). 봇은 공개 벤치마크(§4.3)라 전부 공개 —
+ * openOrders·trades를 함께 싣는다(undefined면 일반 유저 = 비공개). reserved는 리더보드가 이미
  * 참가자별로 공개하는 집계라 포함 — 총 평가액이 리더보드 순위 계산과 일치해야 한다. */
 export interface ParticipantPortfolio {
   user: { name: string | null; isBot: boolean };
@@ -71,6 +97,9 @@ export interface ParticipantPortfolio {
   reserved: string;
   realizedPnl: string;
   positions: PortfolioPosition[];
+  /** 봇 전용(공개 벤치마크) — 일반 유저는 undefined(전략 비공개). */
+  openOrders?: PortfolioOrder[];
+  trades?: PortfolioTrade[];
 }
 
 /**
@@ -86,6 +115,7 @@ export function buildPortfolio(
   realizedPnl: string | null,
   positions: PositionRow[],
   openOrders: OpenOrderRow[],
+  trades: FilledOrderRow[],
 ): PortfolioResponse {
   return {
     season: {
@@ -115,6 +145,16 @@ export function buildPortfolio(
       limitPrice: o.limitPrice,
       reserved: o.reserved,
       createdAt: o.createdAt.toISOString(),
+    })),
+    trades: trades.map((t) => ({
+      id: t.id,
+      market: t.market,
+      symbol: t.symbol,
+      side: t.side,
+      type: t.type,
+      qty: t.qty,
+      filledPrice: t.filledPrice,
+      filledAt: t.filledAt ? t.filledAt.toISOString() : null,
     })),
   };
 }

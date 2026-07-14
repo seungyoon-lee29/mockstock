@@ -1,13 +1,19 @@
 // GET /api/users/[userId]/portfolio?league=us|kr — 참가자 공개 포트폴리오(리더보드 행 클릭 상세).
 // 무인증 공개: 리더보드 API가 이미 전 참가자 {cash, reserved, positions}를 공개하는 것과 동일 표면.
-// openOrders는 절대 포함하지 않는다 — 미체결 주문은 참가자의 비공개 전략(리더보드도 미노출).
+// 일반 유저는 미체결 주문·거래내역을 숨긴다(비공개 전략). 봇은 공개 벤치마크(§4.3)라 전부 공개.
 // 조회 전용(계좌 lazy upsert 등 부수효과 없음). 금액은 numeric 문자열 그대로(§9 클라 로컬 평가).
 import { and, desc, eq, gt, sum } from "drizzle-orm";
 import type { Market } from "@mockstock/shared";
 import { accounts, orders, positions, seasons, users } from "@mockstock/shared/schema";
 import { getDb } from "@/lib/db";
 import { isCacheFresh } from "@/lib/leaderboard";
-import { buildPortfolio, type ParticipantPortfolio } from "@/lib/portfolio";
+import {
+  buildPortfolio,
+  TRADE_HISTORY_LIMIT,
+  type FilledOrderRow,
+  type OpenOrderRow,
+  type ParticipantPortfolio,
+} from "@/lib/portfolio";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -89,14 +95,53 @@ async function load(market: Market, userId: string): Promise<Omit<CacheEntry, "a
   ]);
 
   const hasAccount = accountRows.length > 0;
-  // buildPortfolio 재사용 — openOrders는 빈 배열로 넘기고 응답에서 필드 자체를 제외(비공개 보장).
+
+  // 봇(공개 벤치마크, §4.3)만 미체결 주문·거래내역까지 전부 공개. 일반 유저는 빈 배열 → 응답에서 필드 제외(비공개).
+  let openOrderRows: OpenOrderRow[] = [];
+  let tradeRows: FilledOrderRow[] = [];
+  if (user.isBot) {
+    [openOrderRows, tradeRows] = await Promise.all([
+      db
+        .select({
+          id: orders.id,
+          market: orders.market,
+          symbol: orders.symbol,
+          side: orders.side,
+          type: orders.type,
+          qty: orders.qty,
+          limitPrice: orders.limitPrice,
+          reserved: orders.reserved,
+          createdAt: orders.createdAt,
+        })
+        .from(orders)
+        .where(and(eq(orders.userId, userId), eq(orders.seasonId, season.id), eq(orders.status, "open")))
+        .orderBy(desc(orders.createdAt)),
+      db
+        .select({
+          id: orders.id,
+          market: orders.market,
+          symbol: orders.symbol,
+          side: orders.side,
+          type: orders.type,
+          qty: orders.qty,
+          filledPrice: orders.filledPrice,
+          filledAt: orders.filledAt,
+        })
+        .from(orders)
+        .where(and(eq(orders.userId, userId), eq(orders.seasonId, season.id), eq(orders.status, "filled")))
+        .orderBy(desc(orders.filledAt))
+        .limit(TRADE_HISTORY_LIMIT),
+    ]);
+  }
+
   const p = buildPortfolio(
     season,
     accountRows[0]?.cash ?? null,
     reservedRows[0]?.v ?? null,
     realizedRows[0]?.v ?? null,
     positionRows,
-    [],
+    openOrderRows,
+    tradeRows,
   );
   const body: ParticipantPortfolio = {
     user: { name: user.name, isBot: user.isBot },
@@ -106,6 +151,8 @@ async function load(market: Market, userId: string): Promise<Omit<CacheEntry, "a
     reserved: p.reserved,
     realizedPnl: p.realizedPnl,
     positions: p.positions,
+    // 봇만 전부 공개 — 일반 유저는 undefined(비공개 전략).
+    ...(user.isBot ? { openOrders: p.openOrders, trades: p.trades } : {}),
   };
   return { status: 200, body };
 }

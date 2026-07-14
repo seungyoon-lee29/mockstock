@@ -7,7 +7,13 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getEntry, keyOf, type Currency, type Quote } from "@mockstock/shared";
 import { usePrices } from "@/lib/market/usePrices";
-import { changeClass, formatPct, formatPrice, formatSignedPrice } from "@/lib/market/format";
+import {
+  changeClass,
+  formatPct,
+  formatPrice,
+  formatSignedPrice,
+  formatTradeTime,
+} from "@/lib/market/format";
 import { LEADERBOARD_POLL_MS } from "@/lib/leaderboard";
 import type { ParticipantPortfolio } from "@/lib/portfolio";
 import { InvestmentProfileCard } from "@/components/profile/investment-profile-card";
@@ -221,6 +227,136 @@ export function ParticipantView({ league, userId }: { league: string; userId: st
               </CardContent>
             </Card>
           </section>
+
+          {/* 봇(공개 벤치마크)만 — 미체결 주문 공개(읽기 전용, 취소 버튼 없음). */}
+          {data.openOrders && (
+            <section>
+              <h2 className="mb-2 text-lg font-semibold">미체결 주문</h2>
+              <Card>
+                <CardContent className="p-0">
+                  {data.openOrders.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">
+                      미체결 주문이 없습니다.
+                    </p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>종목</TableHead>
+                          <TableHead>구분</TableHead>
+                          <TableHead className="text-right">수량</TableHead>
+                          <TableHead className="text-right">주문가</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {data.openOrders.map((o) => {
+                          const name = getEntry(o.market, o.symbol)?.name ?? o.symbol;
+                          return (
+                            <TableRow key={o.id}>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <SymbolAvatar market={o.market} symbol={o.symbol} name={name} />
+                                  <div>
+                                    <div className="font-medium">{name}</div>
+                                    <div className="text-xs text-muted-foreground">{o.symbol}</div>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <span className={o.side === "buy" ? "text-up" : "text-down"}>
+                                  {o.side === "buy" ? "매수" : "매도"}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  · {o.type === "limit" ? "지정가" : "시장가"}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {Number(o.qty).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {o.limitPrice ? formatPrice(Number(o.limitPrice), currency) : "시장가"}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          )}
+
+          {/* 봇(공개 벤치마크)만 — 거래내역 전부 공개. */}
+          {data.trades && (
+            <section>
+              <h2 className="mb-2 text-lg font-semibold">거래내역</h2>
+              <Card>
+                <CardContent className="p-0">
+                  {data.trades.length === 0 ? (
+                    <p className="py-8 text-center text-sm text-muted-foreground">
+                      아직 체결된 거래가 없습니다.
+                    </p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>체결시각</TableHead>
+                          <TableHead>종목</TableHead>
+                          <TableHead>구분</TableHead>
+                          <TableHead className="text-right">수량</TableHead>
+                          <TableHead className="text-right">체결가</TableHead>
+                          <TableHead className="text-right">체결금액</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {data.trades.map((t) => {
+                          const name = getEntry(t.market, t.symbol)?.name ?? t.symbol;
+                          const price = t.filledPrice ? Number(t.filledPrice) : null;
+                          const amount = price != null ? Number(t.qty) * price : null;
+                          return (
+                            <TableRow key={t.id}>
+                              <TableCell className="whitespace-nowrap text-xs text-muted-foreground tabular-nums">
+                                {formatTradeTime(t.filledAt)}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <SymbolAvatar market={t.market} symbol={t.symbol} name={name} />
+                                  <div>
+                                    <div className="font-medium">{name}</div>
+                                    <div className="text-xs text-muted-foreground">{t.symbol}</div>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <span className={t.side === "buy" ? "text-up" : "text-down"}>
+                                  {t.side === "buy" ? "매수" : "매도"}
+                                </span>
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  · {t.type === "limit" ? "지정가" : "시장가"}
+                                </span>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {Number(t.qty).toLocaleString("ko-KR", { maximumFractionDigits: 6 })}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {price != null ? formatPrice(price, currency) : "—"}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {amount != null ? formatPrice(amount, currency) : "—"}
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+            </section>
+          )}
 
           {/* AI 투자 성향(§D8) — 서버가 통계로 lazy 생성, 키 없으면 규칙 기반 간이 분석 */}
           <InvestmentProfileCard league={league} userId={userId} />
