@@ -12,6 +12,7 @@ import { getDb, closeDb } from "./db";
 import { seedInstruments, tapTick, startLastPriceFlush, flushLastPrices, loadAnchors } from "./instruments";
 import { handleBackfill } from "./candles/backfillRoute";
 import { handleIndexCandles } from "./candles/indexCandlesRoute";
+import { handleOrderbook } from "./orderbookRoute";
 import { startIndices, stopIndices } from "./indices";
 
 assertProductionConfig(); // 프로덕션 fail-closed 부팅 게이트 (worker.md) — 시크릿/CORS 없으면 기동 거부
@@ -89,6 +90,11 @@ server.on("request", (req, res) => {
   if ((req.url ?? "").startsWith("/index-candles")) {
     res.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
     void handleIndexCandles(req, res);
+    return;
+  }
+  if ((req.url ?? "").startsWith("/orderbook")) {
+    res.setHeader("Access-Control-Allow-Origin", config.corsOrigin);
+    void handleOrderbook(book, req, res);
     return;
   }
   for (const l of baseListeners) l.call(server, req, res);

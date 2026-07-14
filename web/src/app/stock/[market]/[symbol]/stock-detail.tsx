@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { formatPrice } from "@/lib/market/format";
 import { cn } from "@/lib/utils";
+import { OrderBook } from "@/components/market/order-book";
 import { OrderPanel } from "./order-panel";
 
 const CHART_HEIGHT = 360;
@@ -171,7 +172,10 @@ export function StockDetail({ entry }: { entry: UniverseEntry }) {
             </div>
           )}
         </div>
-        <OrderPanel entry={entry} price={price} />
+        <div className="flex flex-col gap-6">
+          <OrderPanel entry={entry} price={price} />
+          <OrderBook market={entry.market} symbol={entry.symbol} currency={entry.currency} />
+        </div>
       </div>
     </main>
   );

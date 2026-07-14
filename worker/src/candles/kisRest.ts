@@ -27,6 +27,7 @@ const DAILY_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartpr
 const MINUTES_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"; // FHKST03010230
 const PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"; // FHKST01010100 — 주식현재가 시세(상장주식수 lstn_stcn 포함)
 const INDEX_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"; // FHPUP02100000 국내업종 현재지수
+const ASKING_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"; // FHKST01010200 — 주식현재가 호가/예상체결
 const KIS_REST_BASE_DEFAULT = "https://openapi.koreainvestment.com:9443"; // 실전 도메인
 
 function restBase(): string {
@@ -304,6 +305,36 @@ export async function fetchKrShares(symbol: string): Promise<string | null> {
   });
   const out = (json.output ?? {}) as { lstn_stcn?: string };
   return parseShares(out.lstn_stcn);
+}
+
+/**
+ * 주식현재가 호가/예상체결(FHKST01010200) — 10단계 매도·매수 호가 + 잔량(표시 전용, 체결 무관).
+ * 모든 KIS 호출과 동일한 kisGet(단일 throttle) 경유 — 2 req/s 불변식 공유(백필·인덱스 폴링과 함께).
+ * 키 부재 시 null(호출부 fail-soft). 빈 호가(장마감 등)도 null → 호출부가 synth로 폴백.
+ */
+export async function fetchKrOrderbook(
+  symbol: string,
+): Promise<{ asks: { price: number; qty: number }[]; bids: { price: number; qty: number }[] } | null> {
+  if (!isKisRestEnabled()) return null;
+  const json = await kisGet(ASKING_PRICE_PATH, "FHKST01010200", {
+    FID_COND_MRKT_DIV_CODE: "J",
+    FID_INPUT_ISCD: symbol,
+  });
+  const o = (json.output1 ?? {}) as Record<string, string>;
+  // VERIFIED against live KIS: output1.askp1..askp10 (매도호가, askp1=최우선/최저 매도), askp_rsqn1..10 (매도잔량);
+  // bidp1..bidp10 (매수호가, bidp1=최우선/최고 매수), bidp_rsqn1..10 (매수잔량).
+  const asks: { price: number; qty: number }[] = [];
+  const bids: { price: number; qty: number }[] = [];
+  for (let i = 1; i <= 10; i++) {
+    const ap = Number(o[`askp${i}`]);
+    const aq = Number(o[`askp_rsqn${i}`]);
+    if (Number.isFinite(ap) && ap > 0) asks.push({ price: ap, qty: Number.isFinite(aq) ? aq : 0 });
+    const bp = Number(o[`bidp${i}`]);
+    const bq = Number(o[`bidp_rsqn${i}`]);
+    if (Number.isFinite(bp) && bp > 0) bids.push({ price: bp, qty: Number.isFinite(bq) ? bq : 0 });
+  }
+  if (asks.length === 0 && bids.length === 0) return null; // 장마감 등 빈 호가 → 호출부가 synth 폴백
+  return { asks, bids }; // 이미 askp1=best(오름차순), bidp1=best(내림차순) 순서
 }
 
 /** "0123456789" / "1,234" / " 12 " → "12345"(정수 문자열). 비수치·0·음수·소수는 null. */
