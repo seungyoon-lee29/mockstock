@@ -1,11 +1,9 @@
-// 홈 인덱스 스트립 폴러 (T-index) — KR=KIS 업종지수 REST, US=Finnhub /quote REST.
+// 홈 인덱스 스트립 폴러 (T-index) — KR·US 모두 Yahoo Finance 차트 API로 실제 지수(지연) 폴링.
 // DB 미접촉(B13): 외부 API만 호출해 메모리에 최신 IndexQuote 보관, /indices가 메모리를 읽어 서빙.
-// 키 없으면 해당 시장 폴링 스킵 → 빈 배열(UI "—"). mock 인덱스 값은 만들지 않는다(v1 확정).
-// KIS 콜은 kisRest.fetchKrIndex(=kisGet→throttle) 경유라 캔들 백필과 초당 2건 상한을 공유한다.
-import { INDICES, type IndexQuote, type IndicesPayload } from "@mockstock/shared";
-import { config } from "./config";
-import { envInt, fetchKrIndex, isKisRestEnabled } from "./candles/kisRest";
-import { fetchFinnhubQuote } from "./feeds/finnhub";
+// 키 불필요(Yahoo 무키). 폴 실패 종목은 직전값 유지(마지막 종가). 비공식 API라 best-effort.
+import { INDICES, type IndexQuote, type IndicesPayload, type Market } from "@mockstock/shared";
+import { envInt } from "./candles/kisRest";
+import { fetchYahooIndexQuote } from "./feeds/yahoo";
 
 const POLL_MS_DEFAULT = 20_000;
 
@@ -14,41 +12,25 @@ const latest: IndicesPayload = { KR: [], US: [] };
 
 let timer: ReturnType<typeof setInterval> | undefined;
 
-/** KR 인덱스 1라운드 — KIS 업종지수 순차 폴(throttle이 초당 2건 보장). 실패 종목은 스킵. */
-async function pollKr(): Promise<void> {
-  if (!isKisRestEnabled()) return; // 키 없음 → 스킵(빈 배열 유지)
+/** 한 시장 1라운드 — Yahoo 실제 지수(^KS11/^KQ11/^GSPC/^IXIC) 지연 시세 순차 폴. 실패 종목은 스킵. */
+async function pollMarket(market: Market): Promise<void> {
   const out: IndexQuote[] = [];
-  for (const def of INDICES.KR) {
+  for (const def of INDICES[market]) {
     try {
-      const q = await fetchKrIndex(def.key);
+      const q = await fetchYahooIndexQuote(`^${def.key}`); // key 스템에 ^ 접두 → "^KS11"
       if (q) out.push({ ...def, ...q, ts: Date.now() });
     } catch (e) {
-      console.warn(`[indices] KR ${def.label} 폴 실패`, (e as Error).message);
+      console.warn(`[indices] ${market} ${def.label} 폴 실패`, (e as Error).message);
     }
   }
-  if (out.length) latest.KR = out; // 전부 실패면 직전값 유지(마지막 종가)
-}
-
-/** US 인덱스 1라운드 — Finnhub /quote 순차 폴. 실패 종목은 스킵. */
-async function pollUs(): Promise<void> {
-  if (!config.finnhubApiKey) return; // 키 없음 → 스킵
-  const out: IndexQuote[] = [];
-  for (const def of INDICES.US) {
-    try {
-      const q = await fetchFinnhubQuote(def.key);
-      if (q) out.push({ ...def, ...q, ts: Date.now() });
-    } catch (e) {
-      console.warn(`[indices] US ${def.label} 폴 실패`, (e as Error).message);
-    }
-  }
-  if (out.length) latest.US = out;
+  if (out.length) latest[market] = out; // 전부 실패면 직전값 유지
 }
 
 async function pollAll(): Promise<void> {
-  await Promise.all([pollKr(), pollUs()]);
+  await Promise.all([pollMarket("KR"), pollMarket("US")]);
 }
 
-/** 부팅 시 시작 — 즉시 1회 + INDEX_POLL_MS 간격 폴링. 키 없는 시장은 내부에서 스킵. */
+/** 부팅 시 시작 — 즉시 1회 + INDEX_POLL_MS 간격 폴링. */
 export function startIndices(): void {
   void pollAll(); // 부팅 즉시 1회
   const ms = envInt("INDEX_POLL_MS", POLL_MS_DEFAULT);
