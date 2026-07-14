@@ -37,3 +37,6 @@ CLAUDE.local.md
 # 로컬 툴링 산출물
 .mcp.json
 .playwright-mcp/
+.agents/
+.claude/skills/
+skills-lock.json
