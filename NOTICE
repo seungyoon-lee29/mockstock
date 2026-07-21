@@ -1,0 +1,61 @@
+# NOTICE — 서드파티 소프트웨어 · 시장 데이터 고지
+
+이 저장소의 **소스 코드**는 MIT 라이선스다(`LICENSE`).
+아래 항목은 MIT 대상이 아니며 각 제공처의 조건을 따른다.
+
+---
+
+## 1. 서드파티 소프트웨어
+
+### TradingView Lightweight Charts™ (v5.2)
+
+    Copyright 2023 TradingView, Inc.
+    Licensed under the Apache License, Version 2.0
+    https://www.tradingview.com/
+    https://github.com/tradingview/lightweight-charts
+
+이 프로젝트의 모든 차트는 TradingView가 제작한 Lightweight Charts™로 렌더링된다.
+라이선스가 요구하는 어트리뷰션은 차트의 `attributionLogo` 옵션(기본값)으로 화면에
+직접 노출되며, 이 고지가 그 문서상 짝이다. 로고를 끄지 말 것 —
+`web/src/components/PriceChart.tsx` · `web/src/components/market/index-chart.tsx`.
+
+그 밖의 의존성 라이선스는 각 패키지의 `LICENSE`를 따른다(`package-lock.json` 참조).
+
+---
+
+## 2. 시장 데이터 — 런타임 중계만, 저장소에 커밋하지 않음
+
+아래 소스는 **실행 중 실시간으로 받아 화면에 표시할 뿐**이며, 원본 시세를 이 저장소에
+커밋하거나 재배포하지 않는다.
+
+| 소스 | 용도 | 비고 |
+| --- | --- | --- |
+| 한국투자증권(KIS) Open API | KR 실시간 체결가 · 호가 · 일봉 백필 | 원천 데이터 IP는 한국거래소(KRX). 시세 재배포 권리는 부여되지 않으므로 **런타임 중계만** — 리포 커밋 금지(ADR-0003) |
+| Finnhub | US 실시간 체결가 (무료 티어) | |
+| Yahoo Finance (비공식 차트 엔드포인트) | 지수(코스피·코스닥·S&P 500·나스닥) 지연 시세·일봉 | 비공식 API — best-effort, 실패 시 fail-soft |
+| Alpaca Market Data | US 분봉·일봉 백필 | 무료 티어 표출 권리 **명문 미확인(UNCONFIRMED)** — 포트폴리오 용도로 감수, 상용화 시 재검토 |
+
+**KIS 개인 앱키로 받은 시세를 앱에 표출하는 것은 약관상 그레이존이다.** 이 프로젝트는
+비영리 포트폴리오이며, 재배포는 하지 않는다는 전제로 런타임 중계만 유지한다.
+
+## 3. 시장 데이터 — 저장소에 커밋됨 (리플레이 시나리오)
+
+`web/public/replay/**` 의 과거 일봉·분봉 JSON은 **재배포를 허용하는 소스만** 사용한다.
+
+| 소스 | 범위 | 근거 |
+| --- | --- | --- |
+| 공공데이터포털 — 금융위원회 주식시세정보 | KR 과거 일봉 | 이용허락범위 **'제한 없음'** → 공개 저장소 커밋 가능 (ADR-0003) |
+| Stooq | US 과거 일봉 | 사실 데이터 소량 + 출처 표기 (PRD §8) |
+
+## 4. 기업 로고 · 상표
+
+`web/public/logos/**` 의 종목 로고는 각 기업의 상표이며 해당 권리자에게 귀속된다.
+이 프로젝트는 **종목 식별 목적으로만** 표시하며, 소유·제휴·보증 관계를 주장하지 않는다.
+수집 경로는 `scripts/logos/fetch-logos.mjs` (parqet · Google s2 favicon).
+
+---
+
+## 5. 면책
+
+이 프로젝트는 **가상 현금으로 진행되는 모의투자 게임**이다. 실제 주문·체결·정산은 일어나지
+않는다. 표시되는 시세는 지연·근사·mock일 수 있으며, **투자 판단의 근거로 사용해서는 안 된다.**
