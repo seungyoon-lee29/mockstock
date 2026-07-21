@@ -7,8 +7,9 @@ import { fetchKrIndex } from "./candles/kisRest";
 import { fetchFinnhubQuote } from "./feeds/finnhub";
 import { getIndices } from "./indices";
 
-test("shared INDICES — 코스피·코스닥·SPY·QQQ 정의", () => {
-  assert.deepEqual(INDICES.KR.map((d) => d.key), ["0001", "1001"]);
+test("shared INDICES — 코스피·코스닥·S&P 500·나스닥 정의", () => {
+  // KR 키는 Yahoo 심볼 스템(^KS11/^KQ11) — KIS 업종지수 코드(0001/1001)에서 전환됨.
+  assert.deepEqual(INDICES.KR.map((d) => d.key), ["KS11", "KQ11"]);
   assert.deepEqual(INDICES.US.map((d) => d.label), ["S&P 500", "나스닥"]);
 });
 
