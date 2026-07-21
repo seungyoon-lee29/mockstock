@@ -2,13 +2,29 @@
 // 정규장 외 틱은 shared/calendar 판정으로 폐기(B5). 끊김 시 지수 백오프 재연결.
 // approval_key(WS 전용, REST access_token과 별개)만 발급 — 읽기전용 시세라 AES 복호화 불필요.
 // Node 22 내장 WebSocket/fetch 글로벌 사용 — 의존성 없음. 시크릿·키 값은 로그에 노출 금지(B6/B14).
+// KIS_REST_BASE로 실전/모의 판별 — 포함 "openapivts" → VTS, 아니면 실전.
+// 공식 엔드포인트 출처: koreainvestment/open-trading-api kis_devlp.yaml (2026-07-21 확인).
 import { UNIVERSE, type Market, type Tick } from "@mockstock/shared";
 import { isMarketOpen } from "@mockstock/shared/calendar";
+import { config } from "../config";
 import type { Feed } from "./types";
 
-// 모의투자(VTS) 도메인 — 실전 아님. approval_key REST 발급 + WS 접속.
-const APPROVAL_ENDPOINT = "https://openapivts.koreainvestment.com:29443/oauth2/Approval";
-const WS_ENDPOINT = "ws://ops.koreainvestment.com:31000"; // 모의(평문 ws). 실전은 :21000
+// KIS 공식 고정값 (출처: koreainvestment/open-trading-api/kis_devlp.yaml).
+// approval_key 경로는 {REST_BASE}/oauth2/Approval — 실전/모의 도메인이 다를 뿐 경로 동일.
+// REST 도메인은 config.kisRestBase(KIS_REST_BASE, 기본 VTS/모의) 단일 진실 공급원 — 여기서 중복 정의하지 않는다.
+const KIS_WS_PROD = "ws://ops.koreainvestment.com:21000"; // 실전(평문 ws) — 출처: kis_devlp.yaml ops
+const KIS_WS_VTS = "ws://ops.koreainvestment.com:31000"; // 모의(평문 ws) — 출처: kis_devlp.yaml vops
+
+/** config.kisRestBase 기준 실전/모의 판별. */
+function kisEndpoints(): { approvalBase: string; wsUrl: string; isVts: boolean } {
+  const restBase = config.kisRestBase;
+  const isVts = restBase.includes("openapivts");
+  return {
+    approvalBase: restBase,
+    wsUrl: isVts ? KIS_WS_VTS : KIS_WS_PROD,
+    isVts,
+  };
+}
 const TR_ID_TRADE = "H0STCNT0"; // 국내주식 실시간체결가
 const TR_TYPE_SUBSCRIBE = "1"; // 1=등록 2=해제
 const TR_ID_PINGPONG = "PINGPONG";
@@ -26,6 +42,8 @@ export const kisStats = { subscribeRejects: 0 };
 export class KisFeed implements Feed {
   readonly market: Market = "KR";
   private readonly symbols: string[];
+  private readonly approvalUrl: string;
+  private readonly wsUrl: string;
   private ws: WebSocket | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private attempt = 0;
@@ -37,6 +55,11 @@ export class KisFeed implements Feed {
     private readonly appKey: string,
     private readonly appSecret: string,
   ) {
+    const { approvalBase, wsUrl, isVts } = kisEndpoints();
+    this.approvalUrl = `${approvalBase}/oauth2/Approval`;
+    this.wsUrl = wsUrl;
+    console.log(`[kis] ${isVts ? "모의(VTS)" : "실전"} 모드 — WS ${wsUrl}`);
+
     const kr = UNIVERSE.filter((e) => e.market === "KR").map((e) => e.symbol);
     if (kr.length > MAX_SYMBOLS) {
       console.warn(`[kis] KR 유니버스 ${kr.length}종목 > 한도 ${MAX_SYMBOLS} — 앞 ${MAX_SYMBOLS}개만 구독`);
@@ -57,7 +80,7 @@ export class KisFeed implements Feed {
   // WS 전용키. 24h 캐시 — 재연결은 캐시 재사용이라 Approval 재요청이 자연 스로틀됨(B6).
   private async getApprovalKey(): Promise<string> {
     if (this.approvalKey && Date.now() - this.approvalKeyAt < APPROVAL_TTL_MS) return this.approvalKey;
-    const res = await fetch(APPROVAL_ENDPOINT, {
+    const res = await fetch(this.approvalUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       // 주의: 필드명은 secretkey (REST tokenP의 appsecret 아님).
@@ -81,7 +104,7 @@ export class KisFeed implements Feed {
       return;
     }
 
-    const ws = new WebSocket(WS_ENDPOINT);
+    const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
 
     ws.onopen = () => {

@@ -4,10 +4,11 @@
 //  - 레이트: KIS_REST_RPS(기본 2 — 실측 계정 한도 초당 2건) — 최소 간격 직렬화로 초당 호출 상한(토큰버킷 등가).
 //    초과 시 KIS는 EGW00201("초당 거래건수 초과")을 HTTP 500으로 거부 — kisGet이 1회 재시도.
 //  - 키(KIS_APP_KEY/SECRET) 부재 시 모듈 비활성 — 호출부는 빈 배열을 받는다(fail-soft).
-// 도메인은 KIS_REST_BASE(기본 실전). 모의(VTS) 앱키는 실전 도메인에서 분봉 TR(FHKST03010230)이
-// EGW02004로 거부됨(일봉은 허용) — 모의 키면 KIS_REST_BASE를 VTS(openapivts...:29443)로 설정할 것.
-// VTS 도메인에서 일·분봉 모두 정상 동작 실측(2026-07-11).
+// 도메인은 config.kisRestBase(KIS_REST_BASE, 기본 VTS/모의). 실전 앱키는 KIS_REST_BASE를 실전 도메인
+// (config.KIS_REST_BASE_PROD)으로 설정할 것 — 모의(VTS) 앱키는 실전 도메인에서 분봉 TR(FHKST03010230)이
+// EGW02004로 거부됨(일봉은 허용). VTS 도메인에서 일·분봉 모두 정상 동작 실측(2026-07-11).
 import type { DailyCandle, IntradayCandle } from "@mockstock/shared";
+import { config } from "../config";
 
 /** env 정수 파서(지연 읽기 — 테스트에서 env 주입 가능). 비수치·미설정은 기본값. */
 export function envInt(name: string, def: number): number {
@@ -28,11 +29,7 @@ const MINUTES_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychart
 const PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"; // FHKST01010100 — 주식현재가 시세(상장주식수 lstn_stcn 포함)
 const INDEX_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"; // FHPUP02100000 국내업종 현재지수
 const ASKING_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"; // FHKST01010200 — 주식현재가 호가/예상체결
-const KIS_REST_BASE_DEFAULT = "https://openapi.koreainvestment.com:9443"; // 실전 도메인
 
-function restBase(): string {
-  return process.env.KIS_REST_BASE || KIS_REST_BASE_DEFAULT;
-}
 function appKey(): string | null {
   return process.env.KIS_APP_KEY || null;
 }
@@ -64,7 +61,7 @@ export function _resetKisRestForTest(): void {
 async function issueToken(): Promise<string> {
   lastIssueAt = Date.now();
   await throttle(); // tokenP도 초당 건수에 포함 — 슬롯을 선점해 직후 TR과 같은 초에 몰리지 않게
-  const res = await fetch(`${restBase()}${TOKEN_PATH}`, {
+  const res = await fetch(`${config.kisRestBase}${TOKEN_PATH}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ grant_type: "client_credentials", appkey: appKey(), appsecret: appSecret() }),
@@ -124,7 +121,7 @@ function parseKisErrorBody(text: string): { msgCd: string; msg1: string } {
 /** 공통 GET — 인증 헤더 + 401 시 토큰 1회 갱신 재시도 + EGW00201 1회 재시도 + rt_cd 검사. */
 async function kisGet(path: string, trId: string, params: Record<string, string>): Promise<Record<string, unknown>> {
   let tok = await getToken(); // 토큰 먼저 — 발급 지연이 fetch 간 간격을 압축하지 않게 스로틀은 fetch 직전에
-  const url = new URL(restBase() + path);
+  const url = new URL(config.kisRestBase + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const headers = (t: string) => ({
     "content-type": "application/json; charset=utf-8",
