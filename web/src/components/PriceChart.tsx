@@ -146,7 +146,8 @@ export function PriceChart({
         layout: {
           background: { type: ColorType.Solid, color: "transparent" },
           textColor: axisColor,
-          attributionLogo: false,
+          // attributionLogo 기본값(true) 유지 — lightweight-charts 라이선스가 TradingView 어트리뷰션을
+          // 요구한다(README License 절: NOTICE 고지 + tradingview.com 링크를 페이지에 노출).
         },
         grid: {
           vertLines: { color: gridColor },
